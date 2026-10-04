@@ -93,6 +93,7 @@ function createLimitMonitor(options = {}) {
   let error = null;
   let running = false;
   let generation = 0;
+  let revision = 0;
   let timer = null;
   let inflight = null;
 
@@ -149,20 +150,22 @@ function createLimitMonitor(options = {}) {
     }
   }
 
-  async function run(myGeneration) {
+  async function run(myGeneration, myRevision) {
     let list = null;
     let failure = null;
     try {
-      list = normalizeSources(await getSources());
+      const result = await getSources();
+      list = normalizeSources(Array.isArray(result) ? result : result?.sources);
+      if (!Array.isArray(result) && result?.error) failure = errorMessage(result.error);
     } catch (e) {
       failure = errorMessage(e);
     }
-    if (myGeneration !== generation) return snapshot(); // stopped meanwhile
+    if (myGeneration !== generation || myRevision !== revision) return snapshot();
     checkedAt = now();
-    if (failure) {
-      error = failure;
-    } else {
-      error = null;
+    error = failure;
+    // A partial result replaces the old list so a failed or disconnected
+    // account is never mixed silently with freshly checked providers.
+    if (list !== null) {
       sources = list;
       evaluate(list);
     }
@@ -173,11 +176,22 @@ function createLimitMonitor(options = {}) {
 
   function poll() {
     if (inflight) return inflight;
-    const task = run(generation).finally(() => {
+    const task = run(generation, revision).finally(() => {
       if (inflight === task) inflight = null;
     });
     inflight = task;
     return task;
+  }
+
+  function invalidate(keep = () => false) {
+    revision++;
+    inflight = null;
+    sources = sources.filter(keep);
+    checkedAt = null;
+    error = null;
+    for (const id of memory.keys())
+      if (!sources.some((source) => source.id === id)) memory.delete(id);
+    safe(onStatus, snapshot());
   }
 
   function schedule(myGeneration) {
@@ -207,7 +221,7 @@ function createLimitMonitor(options = {}) {
     }
   }
 
-  return { start, stop, poll, snapshot };
+  return { start, stop, poll, snapshot, invalidate };
 }
 
 module.exports = { createLimitMonitor, formatStatus, tooltip };

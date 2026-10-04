@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld(
     connectionStatus: () => invoke("connectionStatus"),
     claudeDesktopStatus: () => invoke("claudeDesktopStatus"),
     claudeDesktopRefresh: (options) => invoke("claudeDesktopRefresh", options),
+    limitSnapshot: () => invoke("limitSnapshot"),
     claudeDesktopDisconnect: () => invoke("claudeDesktopDisconnect"),
     providerAction: (action) => invoke("providerAction", action),
     openRouterStatus: () => invoke("openRouterStatus"),

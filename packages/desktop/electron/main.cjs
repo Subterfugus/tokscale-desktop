@@ -47,6 +47,7 @@ let window,
   mini,
   monitor,
   claudeRequests,
+  claudeDisconnecting = false,
   quitting = false,
   settingsWarning = "";
 const miniPath = path.join(__dirname, "../dist-renderer/mini.html");
@@ -56,7 +57,7 @@ const MINI_API = new Set([
   "getSettings",
   "run",
   "connectionStatus",
-  "claudeDesktopRefresh",
+  "limitSnapshot",
   "miniControl",
 ]);
 // Started by the login item: stay in the tray until opened.
@@ -86,7 +87,11 @@ const settingsPath = () =>
 let preferenceStore;
 function savePreferences(patch) {
   return preferenceStore.save(patch).then(values => {
+    const homeChanged = preferences.home !== values.home;
+    const claudeChanged = Boolean(preferences.claudeDesktopConnected) !== Boolean(values.claudeDesktopConnected);
     preferences=values; settingsWarning='';
+    if (homeChanged) monitor?.invalidate();
+    else if (claudeChanged) monitor?.invalidate(source => !/claude|anthropic/i.test(source.provider));
     // The save itself succeeded; a failing side effect must not report otherwise.
     for (const effect of [applyTheme, applyLoginItem, () => mini?.applyTheme(), refreshTray])
       try { effect(); } catch (error) { console.error(error.message); }
@@ -132,7 +137,7 @@ function refreshTray() {
   if (!tray) return;
   const status = monitor?.snapshot();
   const lines = [...(status?.lines || [])];
-  if (status?.error && lines.length) lines.push("Last check failed; showing earlier values");
+  if (status?.error) lines.push("Limits check: " + status.error);
   tray.setToolTip(tooltip(lines, "Tokscale Desktop"));
   tray.setContextMenu(
     Menu.buildFromTemplate([
@@ -169,10 +174,10 @@ async function limitSources() {
   };
   const failures = [];
   let desktopClaude = false;
-  if (preferences.claudeDesktopConnected)
+  if (preferences.claudeDesktopConnected && !claudeDisconnecting)
     await claudeRequests.refresh({}).then((result) => {
       add("Claude", result.metrics);
-      desktopClaude = true;
+      desktopClaude = sources.some(source => source.provider === "Claude" && Number.isFinite(source.usedPercent));
     }, (error) => failures.push(error));
   await run(["usage", "--json"]).then((result) => {
     if (result.code !== 0) throw new Error(result.stderr || "Quota report failed");
@@ -185,7 +190,7 @@ async function limitSources() {
     }
   }).catch((error) => failures.push(error));
   if (!sources.length && failures.length) throw failures[0];
-  return sources;
+  return { sources, error: failures.length ? "Some usage limits could not be refreshed" : null };
 }
 // Native window buttons, menus and form popups follow the app's appearance.
 const chrome = () => {
@@ -271,6 +276,7 @@ function wireApi() {
   let claudeRevision = 0;
   handle("claudeDesktopStatus", () => claudeDesktop.status());
   claudeRequests = createProviderCache(async () => {
+    if (claudeDisconnecting) throw new Error("Claude is disconnecting. Try again after it completes.");
     const attempt = claudeRevision;
     const result = smoke
       ? {
@@ -294,11 +300,24 @@ function wireApi() {
     return result;
   });
   handle("claudeDesktopRefresh", (options) => claudeRequests.refresh(options));
+  handle("limitSnapshot", async () => {
+    if (!monitor) return { sources: [], checkedAt: null, error: null, lines: [] };
+    const status = monitor.snapshot();
+    if (status.checkedAt === null || Date.now() - status.checkedAt >= 60000)
+      return monitor.poll();
+    return status;
+  });
   handle("claudeDesktopDisconnect", async () => {
+    claudeDisconnecting = true;
     claudeRevision++;
     claudeRequests.invalidate();
-    await savePreferences({ claudeDesktopConnected: false });
-    return { connected: false };
+    monitor?.invalidate(source => !/claude|anthropic/i.test(source.provider));
+    try {
+      await savePreferences({ claudeDesktopConnected: false });
+      return { connected: false };
+    } finally {
+      claudeDisconnecting = false;
+    }
   });
   const openrouter = createOpenRouter({
     file: path.join(app.getPath("userData"), "openrouter-connection.json"),
@@ -751,6 +770,24 @@ else {
       applyTheme();
       nativeTheme.on("updated", applyTheme);
       wireApi();
+      // Both windows and the tray read one monitor, including the first mini
+      // render. Synthetic checks never access live account credentials.
+      monitor = createLimitMonitor({
+        getSources: smoke ? async () => [
+          { id: "claude:5-hour", provider: "Claude", label: "5-hour usage", usedPercent: 25, resetsAt: null },
+          { id: "claude:weekly", provider: "Claude", label: "Weekly usage", usedPercent: 40, resetsAt: null },
+          { id: "codex:5-hour", provider: "Codex", label: "5-hour", usedPercent: 65, resetsAt: null },
+          { id: "codex:weekly", provider: "Codex", label: "Weekly", usedPercent: 15, resetsAt: null },
+          { id: "antigravity:pro", provider: "Antigravity", label: "Pro", usedPercent: 82, resetsAt: null },
+          { id: "antigravity:flash", provider: "Antigravity", label: "Flash", usedPercent: 12, resetsAt: null },
+        ] : limitSources,
+        isEnabled: () => !smoke && preferences.limitNotifications !== false,
+        onStatus: refreshTray,
+        notify: ({ title, body }) => {
+          if (tray) tray.displayBalloon({ title, content: body, icon: nativeImage.createFromPath(iconPath) });
+          else if (Notification.isSupported()) new Notification({ title, body, icon: iconPath }).show();
+        },
+      });
       await createWindow();
       mini = createMini({
         BrowserWindow,
@@ -779,15 +816,6 @@ else {
       // Without a tray icon there would be no way back to a hidden window.
       if (startHidden && !tray) window.show();
       applyLoginItem();
-      monitor = createLimitMonitor({
-        getSources: limitSources,
-        isEnabled: () => preferences.limitNotifications !== false,
-        onStatus: refreshTray,
-        notify: ({ title, body }) => {
-          if (tray) tray.displayBalloon({ title, content: body, icon: nativeImage.createFromPath(iconPath) });
-          else if (Notification.isSupported()) new Notification({ title, body, icon: iconPath }).show();
-        },
-      });
       refreshTray();
       monitor.start();
       if (preferences.miniOpen) mini.show();

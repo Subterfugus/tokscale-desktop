@@ -1,10 +1,10 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Maximize2, X } from "lucide-react";
 import "./styles.css";
 import "./mini.css";
 import { Meter } from "./charts.jsx";
-import { clock, compact, money, number, safeMessage } from "./format.js";
+import { clock, compact, dateTime, money, number, safeMessage } from "./format.js";
 import { modelTokenTotal } from "./report-data.js";
 import { cssVariable, resolveTheme } from "./themes.js";
 
@@ -60,33 +60,35 @@ async function loadToday(home) {
   };
 }
 
-async function loadLimits() {
-  const status = await api.connectionStatus();
-  if (!status?.claudeDesktopConnected) return [];
-  const result = await api.claudeDesktopRefresh({});
-  return (result?.metrics || []).filter((row) => Number.isFinite(row?.used_percent));
-}
-
 function Mini() {
   const [settings, setSettings] = useState({ theme: "dark", miniTheme: "match", home: "" }),
     [ready, setReady] = useState(false),
     [today, setToday] = useState(null),
-    [limits, setLimits] = useState([]),
-    [failed, setFailed] = useState(false),
+    [limits, setLimits] = useState(null),
+    [reportFailed, setReportFailed] = useState(false),
+    [limitsFailed, setLimitsFailed] = useState(false),
+    [refreshing, setRefreshing] = useState(false),
     [updated, setUpdated] = useState(null),
     [visible, setVisible] = useState(document.visibilityState !== "hidden");
-  const busy = useRef(false);
+  const settingsRevision = useRef(0);
   useMiniTheme(settings);
   useEffect(() => {
     let alive = true;
     Promise.resolve()
       .then(() => api.getSettings())
-      .then((s) => alive && setSettings((x) => ({ ...x, ...s })))
+      .then((s) => {
+        if (alive && settingsRevision.current === 0)
+          setSettings((x) => ({ ...x, ...s }));
+      })
       .catch(() => {})
       .finally(() => alive && setReady(true));
     let off;
     try {
-      off = api.onSettingsChanged?.((s) => setSettings((x) => ({ ...x, ...s })));
+      off = api.onSettingsChanged?.((s) => {
+        if (!alive) return;
+        settingsRevision.current += 1;
+        setSettings((x) => ({ ...x, ...s }));
+      });
     } catch {
       /* Settings sync is best effort. */
     }
@@ -100,33 +102,61 @@ function Mini() {
       } catch {}
     };
   }, []);
-  const refresh = useCallback(async () => {
-    if (busy.current) return;
-    busy.current = true;
-    let bad = false;
-    try {
-      setToday(await loadToday(settings.home));
-    } catch {
-      bad = true;
-    }
-    try {
-      setLimits(await loadLimits());
-    } catch {
-      bad = true;
-    }
-    busy.current = false;
-    setFailed(bad);
-    if (!bad) setUpdated(new Date());
+  // Reports from the previous home must never replace the current home's totals.
+  useEffect(() => {
+    setToday(null);
+    setUpdated(null);
+    setReportFailed(false);
   }, [settings.home]);
   useEffect(() => {
+    setLimits(null);
+    setLimitsFailed(false);
+  }, [settings.claudeDesktopConnected]);
+  useEffect(() => {
     if (!ready || !visible) return;
+    let active = true,
+      busy = false;
+    const refresh = async () => {
+      if (busy) return;
+      busy = true;
+      setRefreshing(true);
+      const [report, snapshot] = await Promise.allSettled([
+        loadToday(settings.home),
+        Promise.resolve().then(() => api.limitSnapshot()),
+      ]);
+      if (!active) return;
+      busy = false;
+      setRefreshing(false);
+      setReportFailed(report.status === "rejected");
+      setLimitsFailed(snapshot.status === "rejected" || Boolean(snapshot.value?.error));
+      if (report.status === "fulfilled") {
+        setToday(report.value);
+        setUpdated(new Date());
+      }
+      if (snapshot.status === "fulfilled") setLimits(snapshot.value);
+    };
     refresh();
     const timer = setInterval(refresh, REFRESH_MS);
-    return () => clearInterval(timer);
-  }, [ready, visible, refresh]);
-  const shown = limits.slice(0, 2);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [ready, visible, settings.home, settings.claudeDesktopConnected]);
+  const shown = (limits?.sources || []).filter((row) =>
+    Number.isFinite(row.usedPercent),
+  );
+  const checkedAt = limits?.checkedAt && new Date(limits.checkedAt);
+  const notices = Array.isArray(limits?.lines)
+    ? limits.lines.filter((line) => typeof line === "string")
+    : [];
+  const status = reportFailed || limitsFailed
+    ? "Refresh incomplete"
+    : refreshing ? "Refreshing…" : "";
   return (
     <div className="mini">
+      {["top", "right", "bottom", "left"].map((edge) => (
+        <span key={edge} className={`mini-resize-edge ${edge}`} aria-hidden="true" />
+      ))}
       <header className="mini-bar">
         <Logo />
         <strong>Tokscale</strong>
@@ -150,31 +180,53 @@ function Mini() {
         </button>
       </header>
       <div className="mini-body">
-        <div className="mini-cost">
-          <span>Today's estimated cost</span>
-          <strong>{today ? money(today.cost) : "—"}</strong>
+        <div className="mini-summary">
+          <div className="mini-cost">
+            <span>Today's estimated cost</span>
+            <strong>{today ? money(today.cost) : "—"}</strong>
+          </div>
+          <div className="mini-stats">
+            <div>
+              <span>Tokens</span>
+              <b>{today ? compact(today.tokens) : "—"}</b>
+            </div>
+            <div>
+              <span>Messages</span>
+              <b>{today ? number(today.messages) : "—"}</b>
+            </div>
+          </div>
         </div>
-        <div className="mini-stats">
-          <div>
-            <span>Tokens</span>
-            <b>{today ? compact(today.tokens) : "—"}</b>
+        <section className="mini-limits" aria-label="Provider limits" tabIndex={0}>
+          <div className="mini-limits-heading">
+            <strong>Provider limits</strong>
+            {checkedAt && !isNaN(checkedAt) && (
+              <span title={`Limits checked ${dateTime(checkedAt)}`}>{clock(checkedAt)}</span>
+            )}
           </div>
-          <div>
-            <span>Messages</span>
-            <b>{today ? number(today.messages) : "—"}</b>
-          </div>
-        </div>
-        {shown.length > 0 && (
-          <div className="mini-limits">
-            {shown.map((row) => (
-              <Meter key={row.label} label={row.label} value={row.used_percent} />
-            ))}
-          </div>
-        )}
+          {shown.length > 0 ? (
+            <div className="mini-limit-list">
+              {shown.map((row) => (
+                <div className="mini-limit" key={row.id || `${row.provider}:${row.label}`}>
+                  <Meter
+                    label={`${row.provider} · ${row.label}`}
+                    value={row.usedPercent}
+                    detail={row.resetsAt ? `Resets ${dateTime(row.resetsAt)}` : undefined}
+                  />
+                </div>
+              ))}
+            </div>
+          ) : <p className="mini-notice">{!limits ? limitsFailed ? "Couldn't load provider limits." : "Loading provider limits…" : limitsFailed ? "Provider limits unavailable." : "No provider limits available."}</p>}
+          {shown.length === 0 && notices.map((line, index) => (
+            <p className="mini-notice" key={index}>{safeMessage(line)}</p>
+          ))}
+          {limitsFailed && shown.length > 0 && (
+            <p className="mini-notice">Some limits couldn't refresh. Last available values are shown.</p>
+          )}
+        </section>
       </div>
       <footer className="mini-foot" role="status">
-        <span>{failed ? "Couldn't refresh" : ""}</span>
-        <span>{updated ? `Updated ${clock(updated)}` : ""}</span>
+        <span title={reportFailed ? "Today's totals couldn't refresh. Last available totals are shown." : undefined}>{status}</span>
+        <span title={updated ? `Today's totals checked ${dateTime(updated)}` : undefined}>{updated ? `Totals ${clock(updated)}` : ""}</span>
       </footer>
     </div>
   );

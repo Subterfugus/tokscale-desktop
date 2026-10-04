@@ -1,7 +1,7 @@
 {
   "name": "tokscale-desktop",
   "productName": "Tokscale Desktop",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "A Windows desktop workspace for the full Tokscale engine",
   "author": "Tokscale Desktop contributors",
   "license": "MIT",

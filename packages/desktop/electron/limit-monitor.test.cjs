@@ -323,6 +323,47 @@ test("snapshot shape and checkedAt", async () => {
   assert.deepEqual(h.statuses[0], snap);
 });
 
+test("partial provider results replace failed provider values and expose the warning", async () => {
+  let result = [src(42), src(15, { id: "codex", provider: "Codex" })];
+  const h = harness({ getSources: async () => result });
+  await h.monitor.poll();
+  result = { sources: [src(20, { id: "codex", provider: "Codex" })], error: "Claude could not be refreshed" };
+  const snap = await h.monitor.poll();
+  assert.equal(snap.sources.length, 1);
+  assert.equal(snap.sources[0].provider, "Codex");
+  assert.equal(snap.error, "Claude could not be refreshed");
+});
+
+test("disconnect invalidation removes values immediately and ignores the old in-flight response", async () => {
+  let release;
+  let queued = false;
+  const h = harness({ getSources: () => queued ? new Promise(resolve => { release = resolve; }) : [src(40), src(20, { id: "codex", provider: "Codex" })] });
+  await h.monitor.poll();
+  queued = true;
+  const old = h.monitor.poll();
+  h.monitor.invalidate(source => source.provider !== "Claude");
+  assert.deepEqual(h.monitor.snapshot().sources.map(s => s.provider), ["Codex"]);
+  assert.equal(h.monitor.snapshot().checkedAt, null);
+  release([src(99)]);
+  await old;
+  assert.deepEqual(h.monitor.snapshot().sources.map(s => s.provider), ["Codex"]);
+  assert.equal(h.notes.length, 0);
+});
+
+test("invalidating during polling allows a new source scope and retains the background schedule", async () => {
+  let release;
+  let calls = 0;
+  const h = harness({ getSources: () => ++calls === 1 ? new Promise(resolve => { release = resolve; }) : [src(30, { id: "codex", provider: "Codex" })] });
+  h.monitor.start();
+  h.monitor.invalidate();
+  await h.monitor.poll();
+  release([src(95)]);
+  await settle();
+  assert.deepEqual(h.monitor.snapshot().sources.map(s => s.provider), ["Codex"]);
+  assert.equal(h.notes.length, 0);
+  assert.equal(h.pending().length, 1);
+});
+
 test("custom thresholds are honoured", async () => {
   const h = harness({ thresholds: [50] });
   await h.setPct(60);

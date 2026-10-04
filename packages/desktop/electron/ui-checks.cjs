@@ -529,11 +529,60 @@ async function runUiChecks({ window, mini, output, terminalCount }) {
       throw new Error(message);
     };
     await until(`/^\\$\\d/.test(document.querySelector(".mini-cost strong")?.innerText || "")`, "Mini window did not load today's cost");
+    await until(`document.querySelectorAll(".mini-limit").length === 6`, "Mini window did not render every synthetic provider limit");
+    const limitText = await inMini(`document.querySelector(".mini-limits").innerText`);
+    for (const provider of ["Claude", "Codex", "Antigravity"])
+      assert.ok(limitText.includes(provider), `Mini window is missing ${provider}`);
+    const limitSnapshot = await inMini(`window.tokscale.limitSnapshot()`);
+    assert.equal(limitSnapshot.sources.length, 6);
+    assert.ok(limitSnapshot.checkedAt, "Shared limits have no check timestamp");
+    assert.equal(limitSnapshot.error, null);
+    assert.equal(mini.isResizable(), true, "Mini window cannot be resized");
+    const originalMiniBounds = mini.getBounds();
+    for (const [width, height] of [[280, 230], [520, 440]]) {
+      mini.setSize(width, height);
+      const [contentWidth, contentHeight] = mini.getContentSize();
+      const [nativeWidth, nativeHeight] = mini.getSize();
+      // Windows rounds outer bounds and its invisible resize border at the
+      // current display scale. Compare content size separately from outer size.
+      assert.ok(Math.abs(nativeWidth - width) <= 2 && Math.abs(nativeHeight - height) <= 2, "Native mini bounds did not resize");
+      await until(`Math.abs(innerWidth - ${contentWidth}) <= 2 && Math.abs(innerHeight - ${contentHeight}) <= 2`, "Mini content did not follow its resized native bounds");
+      const layout = await inMini(`(() => {
+        const limits = document.querySelector(".mini-limits");
+        limits.scrollTop = limits.scrollHeight;
+        const last = document.querySelector(".mini-limit:last-child").getBoundingClientRect();
+        const region = limits.getBoundingClientRect();
+        const footer = document.querySelector(".mini-foot").getBoundingClientRect();
+        return {
+          overflow: document.documentElement.scrollWidth > innerWidth,
+          reachable: last.bottom <= region.bottom + 1 && last.top >= region.top - 1,
+          footerFits: footer.bottom <= innerHeight,
+          drag: getComputedStyle(document.querySelector(".mini")).webkitAppRegion,
+          buttons: [...document.querySelectorAll("button")].map(button => getComputedStyle(button).webkitAppRegion),
+          scrollRegion: getComputedStyle(limits).webkitAppRegion,
+        };
+      })()`);
+      assert.equal(layout.overflow, false, "Mini window overflows horizontally");
+      assert.equal(layout.reachable, true, "Last provider limit cannot be reached");
+      assert.equal(layout.footerFits, true, "Mini footer is outside the window");
+      assert.equal(layout.drag, "drag", "Mini background is not draggable");
+      assert.ok(layout.buttons.every(value => value === "no-drag"), "A mini button is a drag region");
+      assert.equal(layout.scrollRegion, "no-drag", "Mini limits cannot be scrolled interactively");
+      await inMini(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+      await fs.writeFile(path.join(output, `mini-${width}x${height}.png`), (await mini.webContents.capturePage()).toPNG());
+    }
+    await wait(async () => {
+      const bounds = (await window.tokscale.getSettings()).miniBounds;
+      return bounds && Math.abs(bounds.width - 520) <= 2 && Math.abs(bounds.height - 440) <= 2;
+    }, null, "Mini window size was not saved");
+    mini.setBounds(originalMiniBounds);
+    checks.push("Mini window displays all shared provider limits, resizes and saves bounds, and allows dragging with usable controls");
     await exec(() => window.tokscale.saveSettings({ miniTheme: "oled" }));
     await until(`document.documentElement.dataset.theme === "oled"`, "Mini window did not take its own theme");
     assert.equal(await exec(() => document.documentElement.dataset.theme), "dark", "Mini theme changed the main window");
     await fs.writeFile(path.join(output, "mini.png"), (await mini.webContents.capturePage()).toPNG());
     await assert.rejects(inMini(`window.tokscale.saveSettings({ theme: "light" })`), "Mini window could change app settings");
+    await assert.rejects(inMini(`window.tokscale.claudeDesktopRefresh({})`), "Mini window could initiate a Claude connection");
     await exec(() => window.tokscale.saveSettings({ miniTheme: "match" }));
     await until(`document.documentElement.dataset.theme === "dark"`, "Mini window did not follow the main theme again");
     checks.push("Mini window shows today's cost, keeps its own theme, and cannot change settings");
