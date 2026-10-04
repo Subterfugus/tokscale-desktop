@@ -38,7 +38,7 @@ While the app runs, a tray icon shows the current usage limits in its tooltip an
 
 By default, closing the window quits the app. Turn on **Keep running in the tray** to hide the window instead; click the tray icon to bring it back. **Launch at login** starts the app with Windows, hidden in the tray. It applies only to a packaged build, not to a development run, and is registered for the executable you launched.
 
-The mini window is a small always-on-top window with today's estimated cost, tokens and messages, plus Claude limit meters when Claude desktop is connected. It refreshes every minute while visible. Open it from **Show mini window** in Settings or from the tray menu; its position is remembered, and it opens again at the next start if it was open when the app last ran. **Mini window theme** defaults to "Same as main window".
+The mini window is a resizable always-on-top window with today's estimated cost, tokens and messages across all recorded clients, plus every available provider percentage limit from the shared tray monitor. Drag its background or summary to move it; buttons, resize edges and the scrollable limits panel remain interactive. It starts at 300 by 230, has a 280 by 230 minimum, and remembers its size and position while recovering from disconnected monitors. Wider sizes use two limit columns. Totals refresh every minute while visible; limits share cached requests and show their own check time and incomplete-refresh notices. Open it from **Show mini window** in Settings or from the tray menu; it opens again at the next start if it was open when the app last ran. **Mini window theme** defaults to "Same as main window".
 
 ## Connect Claude desktop, Antigravity, and OpenRouter
 

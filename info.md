@@ -8,7 +8,7 @@ This is a fork of [junhoyeo/tokscale](https://github.com/junhoyeo/tokscale), wit
 
 The user wants an easy desktop experience while retaining Tokscale's original capabilities. Priorities include connecting Claude desktop, Antigravity, and OpenRouter without complicated setup. Claude desktop is the user's intended Claude connection; do not assume they mean only the standalone Claude Code CLI.
 
-The desktop package is currently version `0.4.0` and pins the published Windows Tokscale engine at `4.17.0`. The application is Electron with a React interface, loads bundled files through `file://`, and does not require a local web server. The original interactive terminal is available through xterm and node-pty. Windows portable builds and optional NSIS installers are supported; current builds are unsigned.
+The desktop package is currently version `0.4.1` and pins the published Windows Tokscale engine at `4.17.0`. The application is Electron with a React interface, loads bundled files through `file://`, and does not require a local web server. The original interactive terminal is available through xterm and node-pty. Windows portable builds and optional NSIS installers are supported; current builds are unsigned.
 
 ## Where to edit
 
@@ -27,8 +27,8 @@ The desktop package is currently version `0.4.0` and pins the published Windows 
 | `packages/desktop/renderer/styles.css` | All styling and first-paint color defaults; chart series colors per light/dark scheme; declares the bundled Source Serif 4 font |
 | `packages/desktop/electron/themes.cjs`, `themes-dark.cjs`, `themes-light.cjs` | The theme list (Dark, Light, OLED black and the additional palettes). Shared by the renderer (applied as CSS variables, listed in the Settings picker via `renderer/themes.js`), the main process (native title-bar colors), and settings validation. Every theme must pass the contrast rules in `tests/themes.test.mjs` |
 | `packages/desktop/electron/limit-monitor.cjs` | Dependency-free poller: normalizes limit sources, formats tray status lines and tooltip, raises 75% / 90% and reset notifications; 5-minute interval, injectable timers. Tested in `limit-monitor.test.cjs` |
-| `packages/desktop/electron/mini-window.cjs` | Mini window creation (300x230, frameless, always on top), saved-position validation against connected displays, hide-on-close. Tested in `mini-window.test.cjs` |
-| `packages/desktop/renderer/mini.jsx`, `mini.html`, `mini.css` | Mini window page: today's cost, tokens, messages and Claude limit meters; refreshes every minute while visible. Built as a second bundle by `scripts/build.mjs` |
+| `packages/desktop/electron/mini-window.cjs` | Resizable mini window (default 300x230, minimum 280x230, frameless, always on top), saved full bounds with legacy position migration and recovery on display changes, hide-on-close. Tested in `mini-window.test.cjs` |
+| `packages/desktop/renderer/mini.jsx`, `mini.html`, `mini.css` | Mini window page: today's all-client cost, tokens, messages and every available shared provider limit; refreshes every minute while visible. Built as a second bundle by `scripts/build.mjs` |
 | `packages/desktop/renderer/themes.js` | Renderer side of the shared theme list: `resolveTheme` and CSS variable names |
 | `packages/desktop/tests/themes.test.mjs` | Theme list contract: unique ids, complete colour keys, contrast minimums, chart series visibility per scheme |
 | `packages/desktop/renderer/report-data.js` | Token totals and normalization of public CLI report schemas |
@@ -126,7 +126,7 @@ Custom dates are drafts until **Apply range** passes validation. The filter row 
 
 Constraints to preserve in the later additions:
 
-- **Mini window IPC:** `handle()` in `main.cjs` accepts a call from the mini window only when the channel is in `MINI_API` (`getSettings`, `run`, `connectionStatus`, `claudeDesktopRefresh`, `miniControl`) and the sender frame URL is the mini page. Every other channel stays main-window only. Add a channel to the list only when the mini window truly needs it. The mini window shares the main preload, runs sandboxed with context isolation, and denies navigation and new windows.
+- **Mini window IPC:** `handle()` in `main.cjs` accepts a call from the mini window only when the channel is in `MINI_API` (`getSettings`, `run`, `connectionStatus`, `limitSnapshot`, `miniControl`) and the sender frame URL is the mini page. Every other channel stays main-window only. Add a channel to the list only when the mini window truly needs it. The mini window shares the main preload, runs sandboxed with context isolation, and denies navigation and new windows.
 - **Theme list:** `electron/themes.cjs` (with `themes-dark.cjs` and `themes-light.cjs`) is the single source for the renderer (CSS variables and the Settings picker via `renderer/themes.js`), the main process (title-bar colours, `nativeTheme.themeSource`) and settings validation in `security.cjs` (`theme` and `miniTheme`). `system` and `match` (mini only) are not themes and must not be added as ids. A new theme needs every colour key and must pass `tests/themes.test.mjs`; chart series colours are declared per scheme in `styles.css` and are checked there against each theme's card colour.
 - **Stacked charts:** colour follows the entity. `stackModel` in `charts.jsx` ranks keys by chart-wide total, gives the six largest a series slot and folds the rest into Other, so a model, provider or client keeps its colour on every bar. Only daily reports carry the per-row breakdown, so hourly and monthly charts do not stack. Legend entries set the client filter only when stacked by client; the engine can filter by client and date only, so model and provider selections open Models with a search instead.
 - **Day filter:** `focusDay` in `main.jsx` saves the prior date range once and sets a one-day custom range; the `.filter-chip` restores it.
@@ -136,10 +136,19 @@ Constraints to preserve in the later additions:
 
 Insights fills calendar gaps and aligns weekdays. The graph's `summary.totalDays` counts recorded dates, so the daily token average uses the inclusive first-to-last recorded calendar span. The embedded terminal guards cancellation during startup, and its smoke checks deliberately delay returning a terminal ID to exercise that race.
 
-## Pending work (requested by the user on October 4, 2026; not started)
+## Mini window fixes completed in version 0.4.1
 
-1. **Mini window: make it easy to move.** Only the thin `.mini-bar` strip at the top is a drag region today (`renderer/mini.css`, `-webkit-app-region: drag`). The whole window should be draggable, with only the buttons and any interactive controls marked `no-drag`.
-2. **Mini window: make it resizable.** `electron/mini-window.cjs` creates it at a fixed 300x230 with `resizable: false`. Allow resizing with a sensible minimum size, save width and height alongside the position (`miniBounds` currently holds only `x` and `y`; `isOnScreen` and `resolvePosition` assume the fixed size and their tests in `mini-window.test.cjs` must follow), and make the layout in `renderer/mini.jsx` and `mini.css` adapt instead of assuming a fixed height.
-3. **Mini window only shows Claude.** The user reported this. Cause of the limits part: `loadLimits()` in `renderer/mini.jsx` only calls `claudeDesktopRefresh`, and it renders at most two meters (`limits.slice(0, 2)`). The tray already has every provider through `limitSources()` and the limit monitor in `electron/main.cjs`. Likely fix: add one read-only channel to `MINI_API` that returns the monitor's latest snapshot (which already leaves Copilot out), and render all of those sources, which also needs the resizable layout from item 2. Before fixing, confirm with the user whether "only Claude" also refers to the cost and token figures: those come from `models --json --today` with no client filter, so they should cover every client; verify that against real data rather than assuming.
+The October 4 pending mini-window work is complete:
 
-State at the time of this note: all desktop work from October 4 (UI overhaul, themes, tray limit warnings, click-through filtering, stacked charts, mini window, launch at login, Claude session titles, token-type checkboxes, Copilot hidden from Limits and the tray) is uncommitted on the `desktop-ui` branch. The user runs the portable build copied to their Desktop (`Tokscale-Desktop-0.4.0-x64.exe`); after a change, rebuild with `npm run package`, stop the running app, replace that file and relaunch it.
+- The background and summary area are draggable. Buttons, native resize edges, and the keyboard-accessible scrolling limits panel are marked `no-drag` so they remain usable.
+- The window resizes from a 280x230 minimum, starts at 300x230, and saves `miniBounds` as `{x,y,width,height}`. Legacy `{x,y}` settings still load. Bounds recover when monitors are removed or their work areas change. The renderer scrolls at compact sizes and uses two limit columns at wider sizes.
+- `limitSnapshot` reads the tray's shared monitor. Every returned finite percentage limit is displayed, with provider name and reset time when reported. The mini no longer calls the Claude refresh endpoint directly; that channel is no longer allowed from the mini frame. The monitor shares requests, refreshes an old snapshot on demand, marks failed checks, and invalidates late results after connection changes.
+- Today's totals remain an unfiltered `models --json --today` report, honoring the selected report home. Real local data checked on October 4 included both Claude and Codex. Account quotas and recorded tokens remain different data sources. OpenRouter's account dollar balance is not a percentage quota and is not added as an invented meter.
+
+The 0.4 interface work is committed; the previous note saying it was uncommitted was stale. This patch retains the published engine at 4.17.0. Routine verification uses focused tests and hidden smoke runs; synthetic mini checks include six limits across Claude, Codex and Antigravity without accessing live credentials.
+
+The delivered portable build is `Tokscale-Desktop-0.4.1-x64.exe` on the user's Desktop. Rebuild and package after source changes before replacing and relaunching the delivered executable.
+
+## Proposed next features
+
+See [DESKTOP-ROADMAP.md](DESKTOP-ROADMAP.md) for priorities: source coverage and account health, budgets, quota history and pace, period comparisons, session detail pages, a configurable dashboard and mini window, report export and saved views, and safe updates/configuration backup. These are proposals, not implemented work.
