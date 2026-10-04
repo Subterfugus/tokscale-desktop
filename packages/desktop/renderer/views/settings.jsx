@@ -3,7 +3,7 @@ import { Check, FolderOpen, TerminalSquare } from "lucide-react";
 import { api } from "../use-report.js";
 import { Button, Card, Notice, Select } from "../ui.jsx";
 import { THEMES, resolveTheme } from "../themes.js";
-import { safeMessage } from "../format.js";
+import { dateTime, safeMessage } from "../format.js";
 
 function Row({ title, description, children }) {
   return (
@@ -63,11 +63,19 @@ function ThemeButton({ name, active, onClick, colors, split }) {
 
 export function SettingsView({ settings, setSettings, info, toCommand, onSaved }) {
   const [saved, setSaved] = useState(false),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    [upstream, setUpstream] = useState(null),
+    [checkingUpstream, setCheckingUpstream] = useState(false);
   const saveQueue = useRef(Promise.resolve()),
     saveSequence = useRef(0),
     savedTimer = useRef(null);
   useEffect(() => () => clearTimeout(savedTimer.current), []);
+  useEffect(() => {
+    let alive = true, revision = 0;
+    api.upstreamStatus().then(status => { if (alive && revision === 0) setUpstream(status); }).catch(() => {});
+    const off = api.onUpstreamStatus(status => { revision++; if (alive) setUpstream(status); });
+    return () => { alive = false; off(); };
+  }, []);
   const save = async (patch) => {
     const sequence = ++saveSequence.current;
     setError("");
@@ -225,6 +233,34 @@ export function SettingsView({ settings, setSettings, info, toCommand, onSaved }
             onChange={(launchAtLogin) => save({ launchAtLogin })}
           />
         </Row>
+      </Card>
+      <Card title="Upstream updates">
+        <Row
+          title="Notify when original Tokscale changes"
+          description="Check junhoyeo/tokscale's default branch hourly while this app is running, including in the tray. The first check establishes a baseline."
+        >
+          <Switch
+            label="Upstream update notifications"
+            checked={settings.upstreamNotifications !== false}
+            onChange={(upstreamNotifications) => save({ upstreamNotifications })}
+          />
+        </Row>
+        <Row
+          title="Original repository"
+          description={upstream?.checkedAt ? `Last checked ${dateTime(upstream.checkedAt)}${upstream.sha ? ` · ${upstream.sha.slice(0, 7)}` : ""}` : "Waiting for the first successful check."}
+        >
+          <Button small disabled={checkingUpstream || upstream?.checking} onClick={async () => {
+            setCheckingUpstream(true);
+            try { setUpstream(await api.upstreamCheck()); }
+            catch (e) { setError(safeMessage(e.message)); }
+            finally { setCheckingUpstream(false); }
+          }}>{checkingUpstream || upstream?.checking ? "Checking…" : "Check now"}</Button>
+          <Button small variant="ghost" onClick={() => api.openExternal(upstream?.url || "https://github.com/junhoyeo/tokscale").catch(e => setError(safeMessage(e.message)))}>
+            {upstream?.previousSha ? "View changes" : "View repository"}
+          </Button>
+        </Row>
+        {upstream?.error && <Notice tone="error">{upstream.error}</Notice>}
+        {upstream?.changedAt && <p className="muted">Latest detected change: {upstream.title || upstream.sha?.slice(0, 7)}</p>}
       </Card>
       <Card title="Mini window">
         <Row

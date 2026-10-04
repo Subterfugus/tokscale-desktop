@@ -28,6 +28,7 @@ const { createPreferences } = require("./preferences.cjs");
 const { resolveTheme } = require("./themes.cjs");
 const { createMini } = require("./mini-window.cjs");
 const { createLimitMonitor, tooltip } = require("./limit-monitor.cjs");
+const { createUpstreamMonitor, validateState: validateUpstreamState } = require("./upstream-monitor.cjs");
 const pkg = require("../package.json");
 const enginePath = app.isPackaged
   ? path.join(process.resourcesPath, "engine", "tokscale.exe")
@@ -42,10 +43,12 @@ const iconPath = app.isPackaged
   : path.join(__dirname, "../assets/icon.png");
 const terminals = new Map(),
   runs = new Set();
+const upstreamNotices = new Set();
 let window,
   tray,
   mini,
   monitor,
+  upstreamMonitor,
   claudeRequests,
   claudeDisconnecting = false,
   quitting = false,
@@ -68,6 +71,7 @@ let preferences = {
   home: "",
   defaultPeriod: "month",
   includeGeminiThoughts: true,
+  upstreamNotifications: true,
 };
 let pty;
 try {
@@ -89,7 +93,12 @@ function savePreferences(patch) {
   return preferenceStore.save(patch).then(values => {
     const homeChanged = preferences.home !== values.home;
     const claudeChanged = Boolean(preferences.claudeDesktopConnected) !== Boolean(values.claudeDesktopConnected);
+    const upstreamChanged = (preferences.upstreamNotifications !== false) !== (values.upstreamNotifications !== false);
     preferences=values; settingsWarning='';
+    if (upstreamMonitor && !smoke && upstreamChanged) {
+      if (values.upstreamNotifications !== false) upstreamMonitor.start();
+      else upstreamMonitor.stop();
+    }
     if (homeChanged) monitor?.invalidate();
     else if (claudeChanged) monitor?.invalidate(source => !/claude|anthropic/i.test(source.provider));
     // The save itself succeeded; a failing side effect must not report otherwise.
@@ -272,6 +281,8 @@ function terminal(id) {
   return terminals.get(id);
 }
 function wireApi() {
+  handle("upstreamStatus", () => upstreamMonitor?.snapshot() || null);
+  handle("upstreamCheck", () => upstreamMonitor.poll());
   const claudeDesktop = createClaudeDesktop({ env: engineEnv() });
   let claudeRevision = 0;
   handle("claudeDesktopStatus", () => claudeDesktop.status());
@@ -750,6 +761,7 @@ async function smokeTest() {
   );
 }
 app.setName("Tokscale Desktop");
+if (process.platform === "win32") app.setAppUserModelId("io.tokscale.desktop");
 if (smoke) {
   const output = switchValue("--smoke-output");
   if (output) app.setPath("userData", path.join(output, "app-data"));
@@ -770,6 +782,28 @@ else {
       applyTheme();
       nativeTheme.on("updated", applyTheme);
       wireApi();
+      upstreamMonitor = createUpstreamMonitor({
+        store: createPreferences(path.join(app.getPath("userData"), "upstream-updates.json"), {}, validateUpstreamState),
+        ...(smoke ? { fetchImpl: async () => ({
+          ok: true, status: 200, headers: new Headers(),
+          text: async () => JSON.stringify([{ sha: "a".repeat(40), commit: { message: "Synthetic upstream update baseline" } }]),
+        }) } : {}),
+        onStatus: (status) => send("upstreamStatus", status),
+        notify: ({ title, body, url }) => {
+          if (smoke || preferences.upstreamNotifications === false) return;
+          if (Notification.isSupported()) {
+            const notice = new Notification({ title, body, icon: iconPath });
+            upstreamNotices.add(notice);
+            notice.on("click", () => void shell.openExternal(security.externalUrl(url)).catch(() => {}));
+            notice.on("close", () => upstreamNotices.delete(notice));
+            notice.on("failed", () => {
+              upstreamNotices.delete(notice);
+              if (tray) tray.displayBalloon({ title, content: body });
+            });
+            notice.show();
+          } else if (tray) tray.displayBalloon({ title, content: body });
+        },
+      });
       // Both windows and the tray read one monitor, including the first mini
       // render. Synthetic checks never access live account credentials.
       monitor = createLimitMonitor({
@@ -818,6 +852,7 @@ else {
       applyLoginItem();
       refreshTray();
       monitor.start();
+      if (preferences.upstreamNotifications !== false) upstreamMonitor.start();
       if (preferences.miniOpen) mini.show();
     })
     .catch(async (error) => {
@@ -838,6 +873,9 @@ else {
   app.on("before-quit", () => {
     quitting = true;
     monitor?.stop();
+    upstreamMonitor?.stop();
+    for (const notice of upstreamNotices) notice.close();
+    upstreamNotices.clear();
     mini?.destroy();
     tray?.destroy();
     stopAll();

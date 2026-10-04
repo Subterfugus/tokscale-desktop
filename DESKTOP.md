@@ -40,6 +40,12 @@ By default, closing the window quits the app. Turn on **Keep running in the tray
 
 The mini window is a resizable always-on-top window with today's estimated cost, tokens and messages across all recorded clients, plus every available provider percentage limit from the shared tray monitor. Drag its background or summary to move it; buttons, resize edges and the scrollable limits panel remain interactive. It starts at 300 by 230, has a 280 by 230 minimum, and remembers its size and position while recovering from disconnected monitors. Wider sizes use two limit columns. Totals refresh every minute while visible; limits share cached requests and show their own check time and incomplete-refresh notices. Open it from **Show mini window** in Settings or from the tray menu; it opens again at the next start if it was open when the app last ran. **Mini window theme** defaults to "Same as main window".
 
+### Original Tokscale repository updates
+
+Version 0.4.2 checks the original `junhoyeo/tokscale` repository at startup and hourly while the app is running, including in the tray. The first successful check establishes a baseline; a later default-branch change produces one Windows notification linking to the GitHub comparison. Multiple commits between checks produce one notice. The latest detected commit is remembered across restarts, so unchanged code does not keep raising notifications.
+
+**Upstream updates** in Settings has an enabled-by-default notification switch, **Check now**, the last successful check time, and **View changes**. Requests are read-only, require no GitHub key, share cached checks, and back off when offline or rate limited. These notifications do not merge upstream code or update the desktop app or bundled engine. Enable **Keep running in the tray** for checks after closing the main window, and **Launch at login** for checks after signing in to Windows. Checks stop when the app quits.
+
 ## Connect Claude desktop, Antigravity, and OpenRouter
 
 Open **Connections** for the connection cards. Connected Claude desktop usage and OpenRouter balances also appear under **Limits**.

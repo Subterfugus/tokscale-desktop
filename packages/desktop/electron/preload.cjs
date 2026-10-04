@@ -11,6 +11,9 @@ contextBridge.exposeInMainWorld(
   "tokscale",
   Object.freeze({
     getInfo: () => invoke("getInfo"),
+    upstreamStatus: () => invoke("upstreamStatus"),
+    upstreamCheck: () => invoke("upstreamCheck"),
+    onUpstreamStatus: (callback) => subscribe("upstreamStatus", callback),
     connectionStatus: () => invoke("connectionStatus"),
     claudeDesktopStatus: () => invoke("claudeDesktopStatus"),
     claudeDesktopRefresh: (options) => invoke("claudeDesktopRefresh", options),

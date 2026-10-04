@@ -94,6 +94,7 @@ function settings(value) {
     "launchAtLogin",
     "minimizeToTray",
     "limitNotifications",
+    "upstreamNotifications",
     "miniOpen",
     "includeGeminiThoughts",
     "claudeDesktopConnected",

@@ -8,7 +8,7 @@ This is a fork of [junhoyeo/tokscale](https://github.com/junhoyeo/tokscale), wit
 
 The user wants an easy desktop experience while retaining Tokscale's original capabilities. Priorities include connecting Claude desktop, Antigravity, and OpenRouter without complicated setup. Claude desktop is the user's intended Claude connection; do not assume they mean only the standalone Claude Code CLI.
 
-The desktop package is currently version `0.4.1` and pins the published Windows Tokscale engine at `4.17.0`. The application is Electron with a React interface, loads bundled files through `file://`, and does not require a local web server. The original interactive terminal is available through xterm and node-pty. Windows portable builds and optional NSIS installers are supported; current builds are unsigned.
+The desktop package is currently version `0.4.2` and pins the published Windows Tokscale engine at `4.17.0`. The application is Electron with a React interface, loads bundled files through `file://`, and does not require a local web server. The original interactive terminal is available through xterm and node-pty. Windows portable builds and optional NSIS installers are supported; current builds are unsigned.
 
 ## Where to edit
 
@@ -147,7 +147,17 @@ The October 4 pending mini-window work is complete:
 
 The 0.4 interface work is committed; the previous note saying it was uncommitted was stale. This patch retains the published engine at 4.17.0. Routine verification uses focused tests and hidden smoke runs; synthetic mini checks include six limits across Claude, Codex and Antigravity without accessing live credentials.
 
-The delivered portable build is `Tokscale-Desktop-0.4.1-x64.exe` on the user's Desktop. Rebuild and package after source changes before replacing and relaunching the delivered executable.
+The delivered portable build is `Tokscale-Desktop-0.4.2-x64.exe` on the user's Desktop. Rebuild and package after source changes before replacing and relaunching the delivered executable.
+
+## Original repository update notifications (version 0.4.2)
+
+`electron/upstream-monitor.cjs` watches the default-branch head of `junhoyeo/tokscale` through a fixed public GitHub commits endpoint. It checks at startup and hourly while the app runs, including when the main window is hidden in the tray. Settings contains an enabled-by-default **Upstream update notifications** switch, **Check now**, the last successful check time, and a link to the latest commit or detected comparison.
+
+The first successful check silently establishes a baseline. Later head changes produce one Windows notification with a short commit subject; clicking it opens the GitHub comparison. Multiple commits between checks produce one alert. This checks code changes on the default branch, not every issue, pull request, or branch. It does not merge changes or replace the bundled engine.
+
+Commit identity, ETag, check time, and rate-limit retry deadline are saved separately in `upstream-updates.json` under Electron userData using the ordered preference store. Save succeeds before the notification is emitted, preventing repeated notices across restarts. Requests share in-flight work, have a minimum manual-check interval, a ten-second timeout and bounded response size, and honor rate-limit backoff. Stopping the watcher aborts requests and rejects late results. Failures remain visible in Settings, and later checks retry.
+
+The main window alone may call `upstreamStatus` and `upstreamCheck`; `onUpstreamStatus` subscribes to progress. These channels are not added to `MINI_API`. Monitoring uses no GitHub credentials and sends no usage or chat content. Smoke mode uses a fixed synthetic baseline and never polls GitHub or raises real notifications. Keep running in the tray and launch at login are separate user settings; no checks occur after the app quits.
 
 ## Proposed next features
 

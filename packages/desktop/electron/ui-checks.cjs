@@ -519,6 +519,18 @@ async function runUiChecks({ window, mini, output, terminalCount }) {
   await exec(() => document.querySelector('input[aria-label="Keep running in the tray"]').click());
   await wait(async () => (await window.tokscale.getSettings()).minimizeToTray === false);
   checks.push("Background switches save their settings");
+  assert.equal(await exec(() => document.querySelector('input[aria-label="Upstream update notifications"]').checked), true);
+  await click(".setting-control button", "Check now");
+  await wait(() => document.querySelector(".settings")?.innerText.includes("Last checked"), null, "Upstream update check did not display its check time");
+  const upstream = await exec(() => window.tokscale.upstreamStatus());
+  assert.equal(upstream.sha, "a".repeat(40));
+  assert.equal(upstream.error, null);
+  assert.equal(upstream.changedAt, null, "Initial upstream baseline was marked as a new update");
+  await exec(() => document.querySelector('input[aria-label="Upstream update notifications"]').click());
+  await wait(async () => (await window.tokscale.getSettings()).upstreamNotifications === false);
+  await exec(() => document.querySelector('input[aria-label="Upstream update notifications"]').click());
+  await wait(async () => (await window.tokscale.getSettings()).upstreamNotifications === true);
+  checks.push("Upstream updates are enabled by default; manual checks show a saved baseline and the notification switch saves");
   if (mini) {
     const inMini = (code) => mini.webContents.executeJavaScript(code, true);
     const until = async (code, message) => {
@@ -583,6 +595,7 @@ async function runUiChecks({ window, mini, output, terminalCount }) {
     await fs.writeFile(path.join(output, "mini.png"), (await mini.webContents.capturePage()).toPNG());
     await assert.rejects(inMini(`window.tokscale.saveSettings({ theme: "light" })`), "Mini window could change app settings");
     await assert.rejects(inMini(`window.tokscale.claudeDesktopRefresh({})`), "Mini window could initiate a Claude connection");
+    await assert.rejects(inMini(`window.tokscale.upstreamCheck()`), "Mini window could initiate upstream network checks");
     await exec(() => window.tokscale.saveSettings({ miniTheme: "match" }));
     await until(`document.documentElement.dataset.theme === "dark"`, "Mini window did not follow the main theme again");
     checks.push("Mini window shows today's cost, keeps its own theme, and cannot change settings");
