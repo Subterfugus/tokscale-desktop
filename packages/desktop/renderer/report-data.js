@@ -5,14 +5,41 @@ const finite = (value) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
-export function tokenTotal(row = {}) {
-  return ["input", "output", "cacheRead", "cacheWrite", "reasoning"].reduce(
-    (total, key) => total + finite(row?.[key]),
-    0,
-  );
+export const TOKEN_TYPES = [
+  ["input", "Input"],
+  ["output", "Output"],
+  ["cacheRead", "Cache read"],
+  ["cacheWrite", "Cache write"],
+  ["reasoning", "Reasoning"],
+];
+export const ALL_TOKEN_TYPES = TOKEN_TYPES.map(([key]) => key);
+
+// Canonical-ordered valid keys; a missing, invalid or empty value means all.
+export function normalizeTokenTypes(value) {
+  const set = new Set(Array.isArray(value) ? value : []);
+  const keys = ALL_TOKEN_TYPES.filter((key) => set.has(key));
+  return keys.length ? keys : [...ALL_TOKEN_TYPES];
 }
 
-export function modelTokenTotal(report) {
+const selectedKeys = (include) => {
+  if (!include) return ALL_TOKEN_TYPES;
+  const set = new Set(include);
+  return ALL_TOKEN_TYPES.filter((key) => set.has(key));
+};
+
+export function tokenTotal(row = {}, include) {
+  return selectedKeys(include).reduce((total, key) => total + finite(row?.[key]), 0);
+}
+
+export function tokenTypesDetail(include) {
+  const keys = selectedKeys(include);
+  if (keys.length === ALL_TOKEN_TYPES.length) return "All token types";
+  const labels = TOKEN_TYPES.filter(([key]) => keys.includes(key)).map(([, label]) => label.toLowerCase());
+  const text = labels.length > 1 ? `${labels.slice(0, -1).join(", ")} and ${labels.at(-1)}` : labels[0] || "";
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+export function modelTokenTotal(report, include) {
   if (!report) return null;
   // The original model JSON has four top-level token buckets, but no
   // totalReasoning. Reasoning is normalized into its own bucket upstream.
@@ -26,10 +53,10 @@ export function modelTokenTotal(report) {
     cacheRead: report.totalCacheRead,
     cacheWrite: report.totalCacheWrite,
     reasoning,
-  });
+  }, include);
 }
 
-export function graphAverageTokens(graph) {
+export function graphAverageTokens(graph, include) {
   const dates = (graph?.contributions || []).map((day) => day.date).filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date)).sort();
   const span = dates.length
     ? (Date.parse(`${dates.at(-1)}T00:00:00Z`) - Date.parse(`${dates[0]}T00:00:00Z`)) / 86400000 + 1
@@ -37,7 +64,10 @@ export function graphAverageTokens(graph) {
   const days = span || finite(graph?.summary?.totalDays);
   if (!graph?.summary || days <= 0) return null;
   // summary.averagePerDay is USD/day in Tokscale, despite its generic name.
-  return finite(graph.summary.totalTokens) / days;
+  const total = include
+    ? (graph.contributions || []).reduce((sum, day) => sum + tokenTotal(day.tokenBreakdown, include), 0)
+    : finite(graph.summary.totalTokens);
+  return total / days;
 }
 
 export function calendarContributionCells(contributions = []) {

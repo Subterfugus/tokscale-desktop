@@ -8,6 +8,9 @@ const {
   Tray,
   nativeImage,
   safeStorage,
+  nativeTheme,
+  screen,
+  Notification,
 } = require("electron");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -22,6 +25,9 @@ const { createClaudeDesktop } = require("./claude-desktop.cjs");
 const { createProviderCache } = require("./provider-cache.cjs");
 const { getSessionTitles } = require("./session-titles.cjs");
 const { createPreferences } = require("./preferences.cjs");
+const { resolveTheme } = require("./themes.cjs");
+const { createMini } = require("./mini-window.cjs");
+const { createLimitMonitor, tooltip } = require("./limit-monitor.cjs");
 const pkg = require("../package.json");
 const enginePath = app.isPackaged
   ? path.join(process.resourcesPath, "engine", "tokscale.exe")
@@ -38,8 +44,23 @@ const terminals = new Map(),
   runs = new Set();
 let window,
   tray,
+  mini,
+  monitor,
+  claudeRequests,
   quitting = false,
   settingsWarning = "";
+const miniPath = path.join(__dirname, "../dist-renderer/mini.html");
+const miniUrl = pathToFileURL(miniPath).href;
+// The mini window only reads today's totals and limits.
+const MINI_API = new Set([
+  "getSettings",
+  "run",
+  "connectionStatus",
+  "claudeDesktopRefresh",
+  "miniControl",
+]);
+// Started by the login item: stay in the tray until opened.
+const startHidden = process.argv.includes("--hidden");
 let preferences = {
   theme: "dark",
   refreshInterval: 120000,
@@ -64,7 +85,118 @@ const settingsPath = () =>
   path.join(app.getPath("userData"), "desktop-settings.json");
 let preferenceStore;
 function savePreferences(patch) {
-  return preferenceStore.save(patch).then(values => { preferences=values; settingsWarning=''; return values; });
+  return preferenceStore.save(patch).then(values => {
+    preferences=values; settingsWarning='';
+    // The save itself succeeded; a failing side effect must not report otherwise.
+    for (const effect of [applyTheme, applyLoginItem, () => mini?.applyTheme(), refreshTray])
+      try { effect(); } catch (error) { console.error(error.message); }
+    for (const target of [window, mini?.window])
+      if (target && !target.isDestroyed()) target.webContents.send("tokscale:settingsChanged", values);
+    return values;
+  });
+}
+// A portable build runs from a temporary folder; the login item must point at
+// the executable the user actually launched. The registry is only touched
+// when the setting is on or has just been turned off.
+let loginItem = false;
+function applyLoginItem() {
+  const wanted = Boolean(preferences.launchAtLogin);
+  if (!app.isPackaged || smoke || wanted === loginItem) return;
+  loginItem = wanted;
+  app.setLoginItemSettings({
+    openAtLogin: wanted,
+    path: process.env.PORTABLE_EXECUTABLE_FILE || process.execPath,
+    args: ["--hidden"],
+  });
+}
+const miniTheme = () => resolveTheme(
+  !preferences.miniTheme || preferences.miniTheme === "match" ? preferences.theme : preferences.miniTheme,
+  nativeTheme.shouldUseDarkColors,
+);
+function showMain() {
+  if (!window || window.isDestroyed()) return;
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
+}
+function setMiniVisible(visible) {
+  if (!mini) return;
+  visible ? mini.show() : mini.hide();
+}
+// Called by the mini window whenever it is really shown or hidden.
+function miniVisibilityChanged(visible) {
+  if (smoke || quitting || Boolean(preferences.miniOpen) === visible) return;
+  void savePreferences({ miniOpen: visible }).catch(() => {});
+}
+function refreshTray() {
+  if (!tray) return;
+  const status = monitor?.snapshot();
+  const lines = [...(status?.lines || [])];
+  if (status?.error && lines.length) lines.push("Last check failed; showing earlier values");
+  tray.setToolTip(tooltip(lines, "Tokscale Desktop"));
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: "Open Tokscale", click: showMain },
+      {
+        label: "Mini window",
+        type: "checkbox",
+        checked: Boolean(preferences.miniOpen),
+        click: (item) => setMiniVisible(item.checked),
+      },
+      { type: "separator" },
+      ...(lines.length
+        ? lines.map((label) => ({ label, enabled: false }))
+        : [{ label: "No usage limits to show", enabled: false }]),
+      { type: "separator" },
+      { label: "Quit", click: () => { quitting = true; app.quit(); } },
+    ]),
+  );
+}
+// Limits come from the connected Claude desktop account and from the engine's
+// own quota report; the desktop reading wins when both describe Claude.
+async function limitSources() {
+  const sources = [];
+  // Several accounts can share a provider; the account keeps their ids apart.
+  const add = (provider, metrics, account = "") => {
+    for (const metric of Array.isArray(metrics) ? metrics : [])
+      sources.push({
+        id: `${provider}:${account}:${metric.label}`.toLowerCase(),
+        provider,
+        label: metric.label,
+        usedPercent: metric.used_percent,
+        resetsAt: metric.resets_at || null,
+      });
+  };
+  const failures = [];
+  let desktopClaude = false;
+  if (preferences.claudeDesktopConnected)
+    await claudeRequests.refresh({}).then((result) => {
+      add("Claude", result.metrics);
+      desktopClaude = true;
+    }, (error) => failures.push(error));
+  await run(["usage", "--json"]).then((result) => {
+    if (result.code !== 0) throw new Error(result.stderr || "Quota report failed");
+    const rows = JSON.parse(result.stdout);
+    for (const row of Array.isArray(rows) ? rows : []) {
+      // Copilot is hidden in the app; the Limits page skips it too.
+      if (typeof row?.provider !== "string" || /^copilot$/i.test(row.provider)) continue;
+      if (desktopClaude && /claude|anthropic/i.test(row.provider)) continue;
+      add(row.provider.replace(/^\w/, (c) => c.toUpperCase()), row.metrics, row.account?.label || row.email || "");
+    }
+  }).catch((error) => failures.push(error));
+  if (!sources.length && failures.length) throw failures[0];
+  return sources;
+}
+// Native window buttons, menus and form popups follow the app's appearance.
+const chrome = () => {
+  const { colors } = resolveTheme(preferences.theme, nativeTheme.shouldUseDarkColors);
+  return { color: colors.page, symbolColor: colors.text2, height: 40 };
+};
+function applyTheme() {
+  nativeTheme.themeSource = preferences.theme === "system" ? "system" : resolveTheme(preferences.theme, true).scheme;
+  if (!window || window.isDestroyed()) return;
+  window.setTitleBarOverlay(chrome());
+  window.setBackgroundColor(chrome().color);
 }
 const smoke = process.argv.includes("--desktop-smoke");
 const switchValue = (name) =>
@@ -118,12 +250,13 @@ function stopAll() {
 }
 function handle(name, callback) {
   ipcMain.handle("tokscale:" + name, (event, ...input) => {
-    if (
-      !window ||
-      event.sender !== window.webContents ||
-      event.senderFrame !== window.webContents.mainFrame ||
-      event.senderFrame.url !== indexUrl
-    )
+    const from = (target, url) =>
+      target &&
+      !target.isDestroyed() &&
+      event.sender === target.webContents &&
+      event.senderFrame === target.webContents.mainFrame &&
+      event.senderFrame.url === url;
+    if (!from(window, indexUrl) && !(MINI_API.has(name) && from(mini?.window, miniUrl)))
       throw new Error("Untrusted caller");
     return callback(...input);
   });
@@ -137,7 +270,7 @@ function wireApi() {
   const claudeDesktop = createClaudeDesktop({ env: engineEnv() });
   let claudeRevision = 0;
   handle("claudeDesktopStatus", () => claudeDesktop.status());
-  const claudeRequests = createProviderCache(async () => {
+  claudeRequests = createProviderCache(async () => {
     const attempt = claudeRevision;
     const result = smoke
       ? {
@@ -156,7 +289,7 @@ function wireApi() {
       : await claudeDesktop.refresh();
     if (attempt !== claudeRevision) throw new Error('Claude was disconnected while refreshing.');
     // Retain consent to reuse the desktop sign-in, never a duplicate token.
-    await savePreferences({ claudeDesktopConnected: true });
+    if (!preferences.claudeDesktopConnected) await savePreferences({ claudeDesktopConnected: true });
     if (attempt !== claudeRevision) throw new Error('Claude was disconnected while refreshing.');
     return result;
   });
@@ -413,11 +546,18 @@ function wireApi() {
   handle("getSettings", () => preferences);
   handle("saveSettings", async (value) => {
     const next = security.settings(value);
-    delete next.claudeDesktopConnected;
+    // These are owned by the main process and follow real state.
+    for (const key of ["claudeDesktopConnected", "miniOpen", "miniBounds"]) delete next[key];
     const home = next.home;
     if (home && !(await fs.stat(home)).isDirectory())
       throw new Error("Home must be a folder");
     return savePreferences(next);
+  });
+  handle("miniControl", (action) => {
+    if (action === "main") showMain();
+    else if (action === "close") setMiniVisible(false);
+    else if (action === "toggle") setMiniVisible(!mini?.isVisible());
+    else throw new Error("Invalid mini window action");
   });
   handle("windowControl", (action) => {
     if (!["minimize", "maximize", "close"].includes(action))
@@ -432,13 +572,14 @@ async function createWindow() {
   window = new BrowserWindow({
     width: 1440,
     height: 960,
-    minWidth: 1050,
-    minHeight: 720,
+    minWidth: 960,
+    minHeight: 640,
     show: false,
-    backgroundColor: "#080b10",
+    backgroundColor: chrome().color,
     title: "Tokscale Desktop",
     icon: iconPath,
-    frame: false,
+    titleBarStyle: "hidden",
+    titleBarOverlay: chrome(),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -459,7 +600,7 @@ async function createWindow() {
   window.webContents.session.setPermissionCheckHandler(() => false);
   window.webContents.on("render-process-gone", () => stopAll());
   window.once("ready-to-show", () => {
-    if (!smoke) window.show();
+    if (!smoke && !startHidden) window.show();
   });
   window.on("close", (event) => {
     if (preferences.minimizeToTray && tray && !quitting && !smoke) {
@@ -467,7 +608,11 @@ async function createWindow() {
       window.hide();
     }
   });
-  window.on("closed", stopAll);
+  // The mini window must not keep the app alive once the main window is gone.
+  window.on("closed", () => {
+    stopAll();
+    if (!quitting) app.quit();
+  });
   await window.loadFile(indexPath);
 }
 async function smokeTest() {
@@ -557,6 +702,7 @@ async function smokeTest() {
   if (require("node:fs").existsSync(uiCheckPath))
     uiChecks = await require(uiCheckPath).runUiChecks({
       window,
+      mini: mini?.window,
       output,
       fixtureHome: switchValue("--smoke-home"),
       terminalCount: () => terminals.size,
@@ -591,9 +737,8 @@ if (smoke) {
 }
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
-  app.on("second-instance", () => {
-    window?.show();
-    window?.focus();
+  app.on("second-instance", (_event, argv) => {
+    if (!argv.includes("--hidden")) showMain();
   });
   app
     .whenReady()
@@ -603,9 +748,23 @@ else {
       preferences=loaded.values; settingsWarning=loaded.warning;
       if (smoke) await savePreferences({home:switchValue("--smoke-home") || ""});
       Menu.setApplicationMenu(null);
+      applyTheme();
+      nativeTheme.on("updated", applyTheme);
       wireApi();
       await createWindow();
+      mini = createMini({
+        BrowserWindow,
+        screen,
+        preloadPath: path.join(__dirname, "preload.cjs"),
+        htmlPath: miniPath,
+        iconPath,
+        smoke,
+        getState: () => ({ bounds: preferences.miniBounds, theme: miniTheme() }),
+        saveState: ({ bounds }) => void savePreferences({ miniBounds: bounds }).catch(() => {}),
+        onVisibility: miniVisibilityChanged,
+      });
       if (smoke) {
+        mini.show();
         await smokeTest();
         quitting = true;
         app.quit();
@@ -614,31 +773,24 @@ else {
       const image = nativeImage.createFromPath(iconPath);
       if (!image.isEmpty()) {
         tray = new Tray(image.resize({ width: 16, height: 16 }));
-        tray.setToolTip("Tokscale Desktop");
-        tray.setContextMenu(
-          Menu.buildFromTemplate([
-            {
-              label: "Open Tokscale Desktop",
-              click: () => {
-                window.show();
-                window.focus();
-              },
-            },
-            { type: "separator" },
-            {
-              label: "Quit",
-              click: () => {
-                quitting = true;
-                app.quit();
-              },
-            },
-          ]),
-        );
-        tray.on("double-click", () => {
-          window.show();
-          window.focus();
-        });
+        tray.on("click", showMain);
+        tray.on("double-click", showMain);
       }
+      // Without a tray icon there would be no way back to a hidden window.
+      if (startHidden && !tray) window.show();
+      applyLoginItem();
+      monitor = createLimitMonitor({
+        getSources: limitSources,
+        isEnabled: () => preferences.limitNotifications !== false,
+        onStatus: refreshTray,
+        notify: ({ title, body }) => {
+          if (tray) tray.displayBalloon({ title, content: body, icon: nativeImage.createFromPath(iconPath) });
+          else if (Notification.isSupported()) new Notification({ title, body, icon: iconPath }).show();
+        },
+      });
+      refreshTray();
+      monitor.start();
+      if (preferences.miniOpen) mini.show();
     })
     .catch(async (error) => {
       if (smoke) {
@@ -657,6 +809,9 @@ else {
     });
   app.on("before-quit", () => {
     quitting = true;
+    monitor?.stop();
+    mini?.destroy();
+    tray?.destroy();
     stopAll();
   });
   app.on("window-all-closed", () => app.quit());

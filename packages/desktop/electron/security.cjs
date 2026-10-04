@@ -1,4 +1,5 @@
 const path = require("node:path");
+const { THEMES } = require("./themes.cjs");
 function args(value) {
   if (
     !Array.isArray(value) ||
@@ -81,11 +82,19 @@ function settings(value) {
         throw new Error("Invalid preference");
       result[key] = value[key];
     }
-  if (value.theme !== undefined && !['dark','light','system'].includes(value.theme)) throw new Error('Unknown appearance setting');
+  if (value.theme !== undefined && value.theme !== 'system' && !THEMES.some(theme => theme.id === value.theme)) throw new Error('Unknown appearance setting');
   if (value.defaultPeriod !== undefined && !['today','yesterday','week','month','all'].includes(value.defaultPeriod)) throw new Error('Unknown default date range');
+  if (value.tokenTypes !== undefined) {
+    const known = ['input','output','cacheRead','cacheWrite','reasoning'];
+    if (!Array.isArray(value.tokenTypes) || !value.tokenTypes.length || value.tokenTypes.some(type => !known.includes(type))) throw new Error('Unknown token type');
+    result.tokenTypes = known.filter(type => value.tokenTypes.includes(type));
+  }
+  if (value.miniTheme !== undefined && !['match','system'].includes(value.miniTheme) && !THEMES.some(theme => theme.id === value.miniTheme)) throw new Error('Unknown mini window theme');
   for (const key of [
     "launchAtLogin",
     "minimizeToTray",
+    "limitNotifications",
+    "miniOpen",
     "includeGeminiThoughts",
     "claudeDesktopConnected",
   ])

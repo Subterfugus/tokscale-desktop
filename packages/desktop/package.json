@@ -1,7 +1,7 @@
 {
   "name": "tokscale-desktop",
   "productName": "Tokscale Desktop",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A Windows desktop workspace for the full Tokscale engine",
   "author": "Tokscale Desktop contributors",
   "license": "MIT",
@@ -22,11 +22,12 @@
     "node-pty": "1.1.0"
   },
   "devDependencies": {
+    "@fontsource-variable/source-serif-4": "5.3.0",
+    "@xterm/addon-fit": "0.10.0",
+    "@xterm/xterm": "5.5.0",
     "electron": "44.5.1",
     "electron-builder": "26.15.3",
     "esbuild": "0.25.12",
-    "@xterm/addon-fit": "0.10.0",
-    "@xterm/xterm": "5.5.0",
     "lucide-react": "0.468.0",
     "react": "19.2.0",
     "react-dom": "19.2.0"

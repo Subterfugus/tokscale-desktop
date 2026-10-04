@@ -1,0 +1,96 @@
+/* Compact always-on-top window. Tokens and shared classes come from styles.css. */
+html,
+body,
+#root {
+  overflow: hidden;
+}
+::-webkit-scrollbar {
+  display: none;
+}
+.mini {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  border: 1px solid var(--line-strong);
+  background: var(--page);
+}
+.mini-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 4px 0 12px;
+  -webkit-app-region: drag;
+}
+.mini-bar .logo {
+  width: 14px;
+  height: 14px;
+}
+.mini-bar strong {
+  flex: 1;
+  font: 600 14px/1 var(--serif);
+}
+.mini-bar .icon-button {
+  width: 26px;
+  height: 26px;
+  -webkit-app-region: no-drag;
+}
+.mini-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  gap: 12px;
+  min-height: 0;
+  padding: 0 14px 8px;
+}
+.mini-cost {
+  display: flex;
+  flex-direction: column;
+}
+.mini-cost span,
+.mini-stats span {
+  color: var(--text-2);
+  font-size: 11.5px;
+}
+.mini-cost strong {
+  font: 500 34px/1.1 var(--serif);
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+.mini-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.mini-stats div {
+  display: flex;
+  flex-direction: column;
+}
+.mini-stats b {
+  font-size: 15px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.mini-limits {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.mini-limits .meter-head {
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+.mini-foot {
+  flex: none;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 16px;
+  padding: 0 14px 6px;
+  color: var(--text-3);
+  font-size: 11px;
+}

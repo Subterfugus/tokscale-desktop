@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 
 // Runs only in --desktop-smoke, against generated local sessions without auth.
 // These exercise the actual bundled React renderer and native bridge.
-async function runUiChecks({ window, output, terminalCount }) {
+async function runUiChecks({ window, mini, output, terminalCount }) {
   const checks = [];
   const exec = async (fn, arg) => {
     const result = await window.webContents.executeJavaScript(
@@ -82,7 +82,7 @@ async function runUiChecks({ window, output, terminalCount }) {
     await ready();
     assert.equal(await exec(() => {
       const button = document.querySelector('.sidebar button.active');
-      return (button?.querySelector(':scope > span:not(.nav-key)')?.innerText || button?.innerText)?.trim();
+      return (button?.querySelector('span')?.innerText || button?.innerText)?.trim();
     }), label, "Navigation highlight does not match the displayed page");
   };
 
@@ -106,6 +106,31 @@ async function runUiChecks({ window, output, terminalCount }) {
   checks.push(
     "Overview totals include all token buckets; date labels match local calendar",
   );
+  const chrome = await exec(() => {
+    const overlay = navigator.windowControlsOverlay;
+    const area = overlay?.getTitlebarAreaRect();
+    return {
+      visible: Boolean(overlay?.visible),
+      free: area ? area.x + area.width : innerWidth,
+      actions: document.querySelector(".header-actions").getBoundingClientRect().right,
+    };
+  });
+  if (chrome.visible) {
+    assert.ok(chrome.actions <= chrome.free, "Header controls sit under the native window buttons");
+    checks.push("Header controls stay clear of the native window buttons");
+  }
+  await exec(() => document.querySelector(".token-types-button").click());
+  for (const type of ["Cache read", "Cache write", "Reasoning"])
+    await exec((type) => document.querySelector(`input[aria-label="Include ${type} tokens"]`).click(), type);
+  await wait(() => document.querySelector(".metrics").innerText.includes("3.3M"), null, "Token type selection did not change the token total");
+  assert.match(await exec(() => document.querySelector(".metrics").innerText), /\$25\.03/, "Token types changed the cost");
+  assert.equal(await exec(() => document.querySelector(".token-types-button").innerText.trim()), "2 of 5 token types");
+  await wait(async () => (await window.tokscale.getSettings()).tokenTypes?.join() === "input,output", null, "Token type selection was not saved");
+  await snapshot("token-types");
+  await click(".token-types button", "Select all");
+  await wait(() => document.querySelector(".metrics").innerText.includes("5.4M"));
+  await exec(() => document.querySelector(".token-types-button").click());
+  checks.push("Token type checkboxes change token totals, leave cost alone, and are saved");
 
   await nav("Models");
   await wait(() =>
@@ -189,7 +214,7 @@ async function runUiChecks({ window, output, terminalCount }) {
       `Grouping ${group} did not load`,
     );
     const report = await exec(
-      () => document.querySelector(".panel-head").innerText,
+      () => document.querySelector(".content .table-summary").innerText,
     );
     assert.match(
       report,
@@ -234,17 +259,43 @@ async function runUiChecks({ window, output, terminalCount }) {
   checks.push("Custom date ranges apply explicitly; reversed ranges keep the current report intact");
 
   await nav("Activity");
+  await wait(() => document.querySelectorAll(".chart-slot.selectable").length === 10, null, "Daily chart bars are not selectable");
+  assert.equal(await exec(() => document.querySelector('select[aria-label="Stack by"]').value), "model");
+  const legend = await exec(() => document.querySelector(".chart-legend").innerText);
+  for (const model of ["gpt-5.5", "gpt-5.4", "claude-opus-4-6", "claude-sonnet-4-6"])
+    assert.ok(legend.includes(model), `Stacked chart legend is missing ${model}`);
   await snapshot("activity");
-  await nav("Projects & sessions");
+  checks.push("Daily chart stacks each day by model with a legend naming every model");
+  await exec(() => [...document.querySelectorAll(".chart-slot.selectable")].at(-1).click());
+  await wait(() => document.querySelector(".filter-chip") && document.querySelector(".filter-summary").innerText.includes("Oct 3"), null, "Selecting a bar did not narrow the range to that day");
+  await ready();
+  await wait(() => /^1 row/.test(document.querySelector(".content .table-summary")?.innerText || ""), null, "Day filter did not reach the report");
+  await exec(() => document.querySelector(".filter-chip").click());
+  await wait(() => !document.querySelector(".filter-chip") && document.querySelector(".filter-summary").innerText.includes("All recorded history"), null, "Clearing the day filter did not restore the range");
+  await ready();
+  await nav("Overview");
+  await wait(() => document.querySelector('.plain-table tbody tr[role="button"]'));
+  const picked = await exec(() => {
+    const row = document.querySelector('.plain-table tbody tr[role="button"]');
+    const model = row.querySelector("b").innerText;
+    row.click();
+    return model;
+  });
+  await wait((picked) => document.querySelector(".page-header h1")?.innerText === "Models" && document.querySelector('input[aria-label="Search report"]')?.value === picked, picked, "Selecting a top model did not open Models searched for it");
+  checks.push("Selecting a chart bar filters the app to that day; selecting a model opens Models searched for it");
+  await nav("Sessions");
   await wait(() => document.querySelector(".content table")?.innerText.includes("Atlas planning"));
   const projectsText = await exec(() => document.querySelector(".content table").innerText);
   assert.match(projectsText, /Beacon planning/);
   assert.doesNotMatch(projectsText, /Initial synthetic prompt/);
-  assert.match(await exec(() => document.querySelector(".view-toolbar select").value), /session/);
+  assert.equal(await exec(() => document.querySelector(".view-toolbar .segmented button.active")?.innerText.trim()), "Sessions");
   await setInput('input[aria-label="Search report"]', "Atlas planning");
   await wait(() => !document.querySelector(".content table")?.innerText.includes("Beacon planning"));
   await setInput('input[aria-label="Search report"]', "");
-  checks.push("Projects opens with sessions and uses searchable saved Codex chat names rather than initial prompts");
+  checks.push("Sessions opens with the Sessions view and uses searchable saved Codex chat names rather than initial prompts");
+  assert.match(await exec(() => document.querySelector(".content table").innerText), /Cedar review/);
+  assert.doesNotMatch(await exec(() => document.querySelector(".content table").innerText), /Cedar generated|Claude session/);
+  checks.push("Claude sessions show their saved custom titles");
   await snapshot("projects");
   await nav("Insights");
   await snapshot("insights");
@@ -256,18 +307,25 @@ async function runUiChecks({ window, output, terminalCount }) {
   checks.push(
     "History, project grouping, and contribution insights render with correct token average",
   );
-  await nav("Subscription quotas");
+  await nav("Limits");
   await connectionsReady();
   await snapshot("quotas");
   const quotaText = await exec(
     () => document.querySelector(".content").innerText,
   );
+  // The fixture disables every engine quota provider, so a meter here would
+  // mean a real sign-in leaked into the synthetic run.
+  assert.equal(
+    await exec(() => document.querySelectorAll(".content .report .panel .meter").length),
+    0,
+    "A real provider quota leaked into the synthetic run",
+  );
   assert.match(quotaText, /no.*quota|quotas.*unavailable|no.*subscription/i);
   assert.match(quotaText, /fail|unavailable|return|diagnostic/i);
   checks.push(
-    "Unauthenticated synthetic quota output is represented without inventing account limits",
+    "Synthetic quota output stays isolated from real sign-ins and invents no account limits",
   );
-  await nav("Integrations");
+  await nav("Connections");
   await connectionsReady();
   await snapshot("integrations");
   const connectionText = await exec(
@@ -335,19 +393,42 @@ async function runUiChecks({ window, output, terminalCount }) {
   );
   await nav("Settings");
   await snapshot("settings");
-  await click(".segmented button", "Light");
+  await click(".theme-grid button", "Light");
   await wait(() => document.documentElement.dataset.theme === "light");
   await nav("Overview");
   await snapshot("overview-light");
   await nav("Settings");
-  await click(".segmented button", "Dark");
+  // Every listed theme must apply its own page colour.
+  const themeNames = await exec(() =>
+    [...document.querySelectorAll(".theme-grid button")].map((button) => button.innerText.trim()),
+  );
+  assert.ok(themeNames.length >= 10, "Theme picker lists too few themes");
+  const pages = new Set();
+  for (const name of themeNames.filter((name) => name !== "System")) {
+    await click(".theme-grid button", name);
+    await wait(
+      (name) => document.querySelector(".theme-grid button.active")?.innerText.trim() === name,
+      name,
+      `Theme ${name} did not become active`,
+    );
+    pages.add(await exec(() => getComputedStyle(document.body).backgroundColor));
+    if (name === "OLED black") {
+      assert.equal(await exec(() => getComputedStyle(document.body).backgroundColor), "rgb(0, 0, 0)");
+      await nav("Overview");
+      await snapshot("overview-oled");
+      await nav("Settings");
+    }
+  }
+  assert.equal(pages.size, themeNames.length - 1, "Two themes share a page colour");
+  await snapshot("settings-themes");
+  await click(".theme-grid button", "Dark");
   await wait(() => document.documentElement.dataset.theme === "dark");
   checks.push(
     "Theme changes save successfully and update the actual desktop appearance",
   );
-  checks.push("Integrations and desktop preferences remain available");
+  checks.push("Connections and desktop preferences remain available");
 
-  await nav("Command center");
+  await nav("Terminal");
   const setCommand = (command) =>
     exec((command) => {
       const input = document.querySelector(
@@ -394,7 +475,7 @@ async function runUiChecks({ window, output, terminalCount }) {
   await new Promise((resolve) => setTimeout(resolve, 1500));
   await snapshot("terminal");
   await nav("Overview");
-  await nav("Command center");
+  await nav("Terminal");
   const remainsRunning = await exec(
     () => document.querySelector(".command-line .primary").disabled,
   );
@@ -412,7 +493,7 @@ async function runUiChecks({ window, output, terminalCount }) {
   );
   await nav("Overview");
   const originalSize = window.getSize();
-  window.setSize(1050, 720);
+  window.setSize(960, 640);
   await snapshot("overview-compact");
   const layout = await exec(() => {
     const bounds = (selector) => {
@@ -423,15 +504,41 @@ async function runUiChecks({ window, output, terminalCount }) {
   });
   assert.equal(layout.bodyOverflow, false, "Window layout overflows horizontally at minimum supported size");
   assert.ok(layout.filter.right <= layout.viewport + 1);
-  await nav("Projects & sessions");
+  await nav("Sessions");
   await snapshot("projects-compact");
-  await nav("Integrations");
+  await nav("Connections");
   await connectionsReady();
   await snapshot("connections-compact");
   assert.equal(await exec(() => [...document.querySelectorAll(".connection-card")].some(card=>card.getBoundingClientRect().right > innerWidth)), false);
   window.setSize(...originalSize);
   await nav("Overview");
   checks.push("Overview, sessions, and account cards fit the minimum window size without horizontal page overflow");
+  await nav("Settings");
+  await exec(() => document.querySelector('input[aria-label="Keep running in the tray"]').click());
+  await wait(async () => (await window.tokscale.getSettings()).minimizeToTray === true, null, "Tray setting was not saved");
+  await exec(() => document.querySelector('input[aria-label="Keep running in the tray"]').click());
+  await wait(async () => (await window.tokscale.getSettings()).minimizeToTray === false);
+  checks.push("Background switches save their settings");
+  if (mini) {
+    const inMini = (code) => mini.webContents.executeJavaScript(code, true);
+    const until = async (code, message) => {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (await inMini(code)) return;
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      throw new Error(message);
+    };
+    await until(`/^\\$\\d/.test(document.querySelector(".mini-cost strong")?.innerText || "")`, "Mini window did not load today's cost");
+    await exec(() => window.tokscale.saveSettings({ miniTheme: "oled" }));
+    await until(`document.documentElement.dataset.theme === "oled"`, "Mini window did not take its own theme");
+    assert.equal(await exec(() => document.documentElement.dataset.theme), "dark", "Mini theme changed the main window");
+    await fs.writeFile(path.join(output, "mini.png"), (await mini.webContents.capturePage()).toPNG());
+    await assert.rejects(inMini(`window.tokscale.saveSettings({ theme: "light" })`), "Mini window could change app settings");
+    await exec(() => window.tokscale.saveSettings({ miniTheme: "match" }));
+    await until(`document.documentElement.dataset.theme === "dark"`, "Mini window did not follow the main theme again");
+    checks.push("Mini window shows today's cost, keeps its own theme, and cannot change settings");
+  }
+  await nav("Overview");
   return {
     passed: checks,
     fixture: "Generated Codex/Claude sessions; no real credentials",

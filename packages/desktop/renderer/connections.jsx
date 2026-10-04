@@ -1,14 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { RefreshCw, ExternalLink, Plug, LoaderCircle } from "lucide-react";
-const api = window.tokscale;
-const dollars = (value) =>
-  new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(
-    value,
-  );
-const timestamp = (value) => {
-  const date = new Date(value);
-  return Number.isFinite(date.getTime()) ? date.toLocaleString() : "Unavailable";
-};
+import { ExternalLink, RefreshCw } from "lucide-react";
+import { api } from "./use-report.js";
+import { Badge, Button, Notice } from "./ui.jsx";
+import { Meter, SERIES, TrendLines } from "./charts.jsx";
+import { dateTime, money } from "./format.js";
+
+const timestamp = (value) =>
+  Number.isFinite(new Date(value).getTime()) ? dateTime(value) : "unavailable";
 
 // A newer request or an unmount must invalidate previous async UI updates.
 // In particular, a late automatic refresh must not undo a disconnect.
@@ -43,20 +41,176 @@ function useConnectionRequest() {
   return { busy, error, run, cancel, clearError: () => setError("") };
 }
 
-function Card({ name, badge, busy, children }) {
+function ConnectionCard({ name, status, tone, busy, summary, children, actions, note }) {
   return (
     <section className="panel connection-card" aria-busy={Boolean(busy)}>
       <div className="panel-head">
         <div>
-          <span className="connection-eyebrow">ACCOUNT CONNECTION</span>
-          <h3>{name}</h3>
+          <h2>{name}</h2>
+          <p>{summary}</p>
         </div>
-        <span className="badge">{badge}</span>
+        <Badge tone={tone}>{status}</Badge>
       </div>
       <div className="connection-body">{children}</div>
+      {note && <p className="connection-note">{note}</p>}
+      <div className="connection-actions">{actions}</div>
     </section>
   );
 }
+
+const external = (run, url) => () => run("opening", () => api.openExternal(url));
+
+export function ClaudeDesktopCard({ epoch }) {
+  const [state, setState] = useState(null),
+    [connected, setConnected] = useState(false);
+  const { busy, error, run, cancel } = useConnectionRequest();
+  const lastEpoch = useRef(epoch);
+  useEffect(() => {
+    const force = lastEpoch.current !== epoch;
+    lastEpoch.current = epoch;
+    run("loading", async (update) => {
+      const [status, info] = await Promise.all([
+        api.claudeDesktopStatus(),
+        api.connectionStatus(),
+      ]);
+      update(() => {
+        setState((previous) =>
+          info.claudeDesktopConnected ? { ...previous, ...status } : status,
+        );
+        setConnected(info.claudeDesktopConnected);
+      });
+      if (info.claudeDesktopConnected) {
+        const result = await api.claudeDesktopRefresh({ force });
+        update(() => setState(result));
+      }
+    });
+    return cancel;
+  }, [epoch, run, cancel]);
+  const connect = () =>
+    run("refresh", async (update) => {
+      const result = await api.claudeDesktopRefresh({ force: true });
+      update(() => {
+        setState(result);
+        setConnected(true);
+      });
+    });
+  const disconnect = () =>
+    run("disconnect", async (update) => {
+      await api.claudeDesktopDisconnect();
+      update(() => {
+        setConnected(false);
+        setState(null);
+      });
+      const status = await api.claudeDesktopStatus();
+      update(() => setState(status));
+    });
+  const samples = (state?.samples || [])
+      .filter((sample) => Number.isFinite(sample.timestamp))
+      .sort((a, b) => a.timestamp - b.timestamp),
+    latest = samples.at(-1),
+    points = samples.slice(-40);
+  const metrics = (
+    state?.metrics ||
+    (latest
+      ? [
+          { label: "5-hour usage", used_percent: latest.fiveHour },
+          { label: "Weekly usage", used_percent: latest.sevenDay },
+        ]
+      : [])
+  ).filter((row) => Number.isFinite(row.used_percent));
+  const live = connected && state?.checkedAt;
+  return (
+    <ConnectionCard
+      name="Claude desktop"
+      busy={busy}
+      summary="Subscription limits for the account signed in to Claude desktop."
+      tone={live ? (error ? "warning" : "good") : undefined}
+      status={
+        busy === "loading"
+          ? "Checking…"
+          : live
+            ? error
+              ? "Stale"
+              : "Connected"
+            : latest
+              ? "Saved snapshot"
+              : state?.detected
+                ? "Sign-in found"
+                : "Not signed in"
+      }
+      note={
+        state?.checkedAt
+          ? `${error ? "Last checked" : "Checked"} ${timestamp(state.checkedAt)}. Your sign-in is read locally and sent only to Anthropic.`
+          : latest
+            ? `Saved snapshot from ${timestamp(latest.timestamp)}.`
+            : !busy && !connected
+              ? state?.detected
+                ? "Your desktop sign-in is available. Connect to check current limits."
+                : "Open Claude desktop and sign in, then connect here."
+              : "Your sign-in is read locally and sent only to Anthropic."
+      }
+      actions={
+        <>
+          <Button
+            variant={connected ? undefined : "primary"}
+            icon={connected ? RefreshCw : undefined}
+            spin={busy === "refresh"}
+            disabled={Boolean(busy)}
+            onClick={connect}
+          >
+            {busy === "refresh"
+              ? "Checking…"
+              : connected
+                ? "Refresh"
+                : "Connect Claude desktop"}
+          </Button>
+          {connected && (
+            <Button variant="ghost" disabled={Boolean(busy)} onClick={disconnect}>
+              {busy === "disconnect" ? "Disconnecting…" : "Disconnect"}
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            iconEnd={ExternalLink}
+            disabled={Boolean(busy)}
+            onClick={external(run, "https://claude.ai/settings/usage")}
+          >
+            Open in Claude
+          </Button>
+        </>
+      }
+    >
+      {error && <Notice tone="error">{error}</Notice>}
+      {metrics.map((row, index) => (
+        <Meter
+          key={index}
+          label={row.label}
+          value={row.used_percent}
+          detail={row.resets_at ? `Resets ${timestamp(row.resets_at)}` : undefined}
+        />
+      ))}
+      {state?.spend && (
+        <p className="connection-line">
+          <span>Extra usage</span>
+          <b>
+            {money(state.spend.spent)} of {money(state.spend.limit)}
+          </b>
+        </p>
+      )}
+      {points.length > 1 && (
+        <TrendLines
+          label="Saved five-hour and weekly plan usage history"
+          points={points}
+          series={[
+            { field: "fiveHour", color: SERIES[0], name: "5-hour" },
+            { field: "sevenDay", color: SERIES[1], name: "Weekly" },
+          ]}
+        />
+      )}
+    </ConnectionCard>
+  );
+}
+
 export function OpenRouterCard({ epoch }) {
   const [state, setState] = useState(null),
     [key, setKey] = useState(""),
@@ -94,65 +248,136 @@ export function OpenRouterCard({ epoch }) {
       });
     });
     // Never retain credentials after submitting, including a failed request.
-    if (kind === "connect") {
-      setKey("");
-    }
+    if (kind === "connect") setKey("");
   }
+  const showForm = editing || (!state?.connected && busy !== "loading");
   return (
-    <Card
+    <ConnectionCard
       name="OpenRouter"
       busy={busy}
-      badge={
+      summary="Account credit balance and spending across your OpenRouter apps."
+      tone={state?.connected ? (error ? "warning" : "good") : undefined}
+      status={
         busy === "loading"
-          ? "Checking connection…"
-          : state?.connected ? "Key saved" : "Connect account"
+          ? "Checking…"
+          : state?.connected
+            ? "Connected"
+            : "Not connected"
+      }
+      note={
+        showForm
+          ? "Balances need a management key, not an inference key. It is stored encrypted on this Windows account and only used to read credit totals."
+          : state?.checkedAt
+            ? `${error ? "Last checked" : "Checked"} ${timestamp(state.checkedAt)}. Account totals, not affected by the report date filter.`
+            : undefined
+      }
+      actions={
+        showForm ? (
+          <>
+            <Button
+              type="submit"
+              form="openrouter-key"
+              variant="primary"
+              disabled={Boolean(busy) || !key.trim()}
+            >
+              {busy === "connect"
+                ? "Connecting…"
+                : editing
+                  ? "Save key"
+                  : "Connect OpenRouter"}
+            </Button>
+            {state?.connected && (
+              <Button
+                variant="ghost"
+                disabled={Boolean(busy)}
+                onClick={() => {
+                  setEditing(false);
+                  setKey("");
+                  clearError();
+                }}
+              >
+                Cancel
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              iconEnd={ExternalLink}
+              disabled={Boolean(busy)}
+              onClick={external(
+                run,
+                "https://openrouter.ai/settings/provisioning-keys",
+              )}
+            >
+              Create a key
+            </Button>
+          </>
+        ) : (
+          state?.connected && (
+            <>
+              <Button
+                icon={RefreshCw}
+                spin={busy === "refresh"}
+                disabled={Boolean(busy)}
+                onClick={() => action("refresh")}
+              >
+                {busy === "refresh" ? "Checking…" : "Refresh"}
+              </Button>
+              <Button
+                variant="ghost"
+                disabled={Boolean(busy)}
+                onClick={() => {
+                  setEditing(true);
+                  clearError();
+                }}
+              >
+                Replace key
+              </Button>
+              <Button
+                variant="ghost"
+                disabled={Boolean(busy)}
+                onClick={() => action("disconnect")}
+              >
+                {busy === "disconnect" ? "Disconnecting…" : "Disconnect"}
+              </Button>
+              <Button
+                variant="ghost"
+                iconEnd={ExternalLink}
+                disabled={Boolean(busy)}
+                onClick={external(run, "https://openrouter.ai/activity")}
+              >
+                Activity
+              </Button>
+            </>
+          )
+        )
       }
     >
-      <p>
-        See your account credit balance and actual spending, across all your
-        OpenRouter apps.
-      </p>
+      {error && <Notice tone="error">{error}</Notice>}
       {state?.remaining != null && (
-        <div className="connection-balances">
+        <dl className="connection-figures">
           <div>
-            <small>Remaining credits</small>
-            <strong>{dollars(state.remaining)}</strong>
+            <dt>Remaining</dt>
+            <dd>{money(state.remaining)}</dd>
           </div>
           <div>
-            <small>Total spent</small>
-            <strong>{dollars(state.spent)}</strong>
+            <dt>Spent</dt>
+            <dd>{money(state.spent)}</dd>
           </div>
           <div>
-            <small>Credits purchased</small>
-            <strong>{dollars(state.purchased)}</strong>
+            <dt>Purchased</dt>
+            <dd>{money(state.purchased)}</dd>
           </div>
-        </div>
+        </dl>
       )}
-      {state?.checkedAt && (
-        <p className="connection-detail">
-          {error ? "Last successful check" : "Checked"}{" "}
-          {timestamp(state.checkedAt)} · account totals, separate from local
-          estimated costs and the report date filter
-        </p>
-      )}
-      {error && (
-        <div className="inline-error" role="alert">
-          {error}
-        </div>
-      )}
-      {busy === "loading" && !state && (
-        <p className="connection-detail" role="status">
-          Checking the saved connection…
-        </p>
-      )}
-      {(editing || (!state?.connected && busy !== "loading")) && (
+      {showForm && (
         <form
+          id="openrouter-key"
           onSubmit={(e) => {
             e.preventDefault();
             if (!busy) action("connect");
           }}
         >
-          <label className="connection-key">
+          <label className="field">
             Management key
             <input
               aria-label="OpenRouter management key"
@@ -166,100 +391,13 @@ export function OpenRouterCard({ epoch }) {
               autoFocus={editing}
             />
           </label>
-          <p className="connection-detail">
-            Account balances require a management key. It stays encrypted on
-            this Windows account. This app only reads credit totals.
-          </p>
-          <div className="connection-actions">
-            <button
-              type="submit"
-              className="button primary"
-              disabled={busy || !key.trim()}
-            >
-              {busy === "connect" ? (
-                <LoaderCircle size={14} className="spin" />
-              ) : (
-                <Plug size={14} />
-              )}{" "}
-              {busy === "connect"
-                ? "Connecting…"
-                : editing ? "Save replacement key" : "Connect OpenRouter"}
-            </button>
-            <button
-              type="button"
-              className="button"
-              disabled={Boolean(busy)}
-              onClick={() =>
-                run("opening", () =>
-                  api.openExternal("https://openrouter.ai/settings/provisioning-keys"),
-                )
-              }
-            >
-              Create management key <ExternalLink size={14} />
-            </button>
-            {state?.connected && (
-              <button
-                type="button"
-                className="text-button"
-                disabled={Boolean(busy)}
-                onClick={() => {
-                  setEditing(false);
-                  setKey("");
-                  clearError();
-                }}
-              >
-                Cancel
-              </button>
-            )}
-          </div>
         </form>
       )}
-      {state?.connected && !editing && (
-        <div className="connection-actions">
-          <button
-            className="button"
-            disabled={Boolean(busy)}
-            onClick={() => action("refresh")}
-          >
-            {busy === "refresh" ? (
-              <LoaderCircle size={14} className="spin" />
-            ) : (
-              <RefreshCw size={14} />
-            )}{" "}
-            {busy === "refresh" ? "Refreshing…" : "Refresh balance"}
-          </button>
-          <button
-            className="button"
-            disabled={Boolean(busy)}
-            onClick={() => {
-              setEditing(true);
-              clearError();
-            }}
-          >
-            Replace key
-          </button>
-          <button
-            className="text-button"
-            disabled={Boolean(busy)}
-            onClick={() => action("disconnect")}
-          >
-            {busy === "disconnect" ? "Disconnecting…" : "Disconnect"}
-          </button>
-          <button
-            className="text-button"
-            disabled={Boolean(busy)}
-            onClick={() =>
-              run("opening", () => api.openExternal("https://openrouter.ai/activity"))
-            }
-          >
-            View usage details <ExternalLink size={14} />
-          </button>
-        </div>
-      )}
-    </Card>
+    </ConnectionCard>
   );
 }
-export function ConnectionCards({ epoch, refresh }) {
+
+export function AntigravityCard({ epoch, refresh }) {
   const [gravity, setGravity] = useState(null),
     [message, setMessage] = useState("");
   const { busy, error, run, cancel } = useConnectionRequest();
@@ -270,345 +408,106 @@ export function ConnectionCards({ epoch, refresh }) {
     });
     return cancel;
   }, [epoch, run, cancel]);
-  async function action(action) {
+  async function action(name) {
     setMessage("");
-    await run(action, async (update) => {
-      const value = await api.providerAction(action);
-      if (action === "antigravity-status" || action === "antigravity-sync") {
-        const status =
-          action === "antigravity-status"
-            ? value
-            : await api.providerAction("antigravity-status");
-        update(() => setGravity(status));
-        if (action === "antigravity-sync") {
-          update(() => {
-            setMessage("Sync finished. Local reports have been refreshed.");
-            refresh();
-          });
-        } else {
-          update(() =>
-            setMessage(
-              status.detectedConnections
-                ? "Antigravity is running. You can sync its usage now."
-                : "No running service found. Open Antigravity, sign in, then detect again.",
-            ),
-          );
-        }
+    await run(name, async (update) => {
+      const value = await api.providerAction(name);
+      if (name === "antigravity-open") {
+        update(() => setMessage("Sign in inside Antigravity, then select Detect."));
+        return;
       }
-      if (action === "antigravity-open")
-        update(() =>
-          setMessage("Sign in inside Antigravity, then click Detect."),
-        );
+      const status =
+        name === "antigravity-status"
+          ? value
+          : await api.providerAction("antigravity-status");
+      update(() => {
+        setGravity(status);
+        if (name === "antigravity-sync") {
+          setMessage("Sync finished. Reports have been refreshed.");
+          refresh();
+        } else
+          setMessage(
+            status.detectedConnections
+              ? "Antigravity is running. You can sync its usage now."
+              : "No running service found. Open Antigravity, sign in, then detect again.",
+          );
+      });
     });
   }
+  const running = Boolean(gravity?.detectedConnections);
   return (
-    <div className="connection-section">
-      <div className="connection-intro">
-        <h2>Connect your accounts</h2>
-        <p>Choose an account below. Setup and status stay here.</p>
-      </div>
-      <div className="connection-grid">
-        <ClaudeDesktopCard epoch={epoch} />
-        <Card
-          name="Antigravity"
-          busy={busy}
-          badge={
-            busy === "loading"
-              ? "Checking local service…"
-              : gravity?.detectedConnections
-                ? "Running · detected"
-                : gravity?.cachedSessions
-                  ? "Saved usage available"
-                  : "Open app to connect"
-          }
-        >
-          <p>
-            Sign in inside Antigravity and keep it open. Tokscale reads its
-            local service and caches activity for your reports.
-          </p>
-          <div className="connection-stat">
-            <strong>{gravity?.cachedSessions ?? "—"}</strong>
-            <span>cached sessions</span>
-            {gravity?.lastSyncedAt && (
-              <small>
-                Last sync {timestamp(gravity.lastSyncedAt)}
-              </small>
-            )}
-          </div>
-          <div className="connection-actions">
-            <button
-              className="button"
-              disabled={Boolean(busy)}
-              onClick={() => action("antigravity-open")}
-            >
-              Open Antigravity
-            </button>
-            <button
-              className="button"
-              disabled={Boolean(busy)}
-              onClick={() => action("antigravity-status")}
-            >
-              {busy === "antigravity-status" && (
-                <LoaderCircle size={14} className="spin" />
-              )}{" "}
-              Detect
-            </button>
-            <button
-              className="button primary"
-              disabled={Boolean(busy) || !gravity?.detectedConnections}
-              onClick={() => action("antigravity-sync")}
-            >
-              {busy === "antigravity-sync" ? (
-                <LoaderCircle size={14} className="spin" />
-              ) : (
-                <RefreshCw size={14} />
-              )}{" "}
-              {busy === "antigravity-sync" ? "Syncing usage…" : "Sync usage"}
-            </button>
-          </div>
-          {busy === "loading" && (
-            <p className="connection-detail" role="status">
-              Checking for Antigravity’s local service…
-            </p>
-          )}
-          {!busy && gravity && !gravity.detectedConnections && (
-            <p className="connection-detail">
-              Sync becomes available when Antigravity is open and its local
-              service is detected.
-            </p>
-          )}
-          {message && (
-            <p className="connection-detail" role="status">
-              {message}
-            </p>
-          )}
-          {error && (
-            <div className="inline-error" role="alert">
-              {error}
-            </div>
-          )}
-          <p className="connection-detail">
-            No API key needed. Subscription quotas appear on the quotas page
-            when its local service exposes them.
-          </p>
-        </Card>
-        <OpenRouterCard epoch={epoch} />
-      </div>
-    </div>
+    <ConnectionCard
+      name="Antigravity"
+      busy={busy}
+      summary="Usage read from Antigravity's local service while the app is open."
+      tone={running ? "good" : undefined}
+      status={
+        busy === "loading"
+          ? "Checking…"
+          : running
+            ? "Running"
+            : gravity?.cachedSessions
+              ? "Saved usage"
+              : "Not running"
+      }
+      note={
+        message ||
+        (running
+          ? "No API key needed. Limits appear on the Limits page when the service reports them."
+          : "Open Antigravity and sign in to enable syncing. No API key needed.")
+      }
+      actions={
+        <>
+          <Button
+            variant="primary"
+            icon={RefreshCw}
+            spin={busy === "antigravity-sync"}
+            disabled={Boolean(busy) || !running}
+            onClick={() => action("antigravity-sync")}
+          >
+            {busy === "antigravity-sync" ? "Syncing…" : "Sync usage"}
+          </Button>
+          <Button
+            disabled={Boolean(busy)}
+            onClick={() => action("antigravity-status")}
+          >
+            Detect
+          </Button>
+          <Button
+            variant="ghost"
+            disabled={Boolean(busy)}
+            onClick={() => action("antigravity-open")}
+          >
+            Open Antigravity
+          </Button>
+        </>
+      }
+    >
+      {error && <Notice tone="error">{error}</Notice>}
+      <dl className="connection-figures">
+        <div>
+          <dt>Cached sessions</dt>
+          <dd>{gravity?.cachedSessions ?? "—"}</dd>
+        </div>
+        <div>
+          <dt>Last sync</dt>
+          <dd className="small">
+            {gravity?.lastSyncedAt ? timestamp(gravity.lastSyncedAt) : "Never"}
+          </dd>
+        </div>
+      </dl>
+    </ConnectionCard>
   );
 }
 
-export function ClaudeDesktopCard({ epoch }) {
-  const [state, setState] = useState(null),
-    [connected, setConnected] = useState(false);
-  const { busy, error, run, cancel } = useConnectionRequest();
-  const lastEpoch = useRef(epoch);
-  useEffect(() => {
-    const force = lastEpoch.current !== epoch;
-    lastEpoch.current = epoch;
-    run("loading", async (update) => {
-      const [status, info] = await Promise.all([
-        api.claudeDesktopStatus(),
-        api.connectionStatus(),
-      ]);
-      update(() => {
-        setState((previous) =>
-          info.claudeDesktopConnected ? { ...previous, ...status } : status,
-        );
-        setConnected(info.claudeDesktopConnected);
-      });
-      if (info.claudeDesktopConnected) {
-        const result = await api.claudeDesktopRefresh({ force });
-        update(() => setState(result));
-      }
-    });
-    return cancel;
-  }, [epoch, run, cancel]);
-  async function connect() {
-    await run("refresh", async (update) => {
-      const result = await api.claudeDesktopRefresh({ force: true });
-      update(() => {
-        setState(result);
-        setConnected(true);
-      });
-    });
-  }
-  async function disconnect() {
-    await run("disconnect", async (update) => {
-      await api.claudeDesktopDisconnect();
-      update(() => {
-        setConnected(false);
-        setState(null);
-      });
-      const status = await api.claudeDesktopStatus();
-      update(() => setState(status));
-    });
-  }
-  const samples = (state?.samples || [])
-      .filter((sample) => Number.isFinite(sample.timestamp))
-      .sort((a, b) => a.timestamp - b.timestamp),
-    latest = samples.at(-1);
-  const points = samples.slice(-40),
-    start = points[0]?.timestamp || 0,
-    duration = (points.at(-1)?.timestamp || 0) - start || 1;
+export function ConnectionCards({ epoch, refresh }) {
   return (
-    <Card
-      name="Claude desktop"
-      busy={busy}
-      badge={
-        busy === "loading"
-          ? "Checking desktop sign-in…"
-          : connected && state?.checkedAt
-            ? error ? "Last successful usage" : "Live usage"
-            : latest
-              ? "Saved plan usage"
-              : state?.detected ? "Desktop sign-in found" : "Sign in to Claude"
-      }
-    >
-      <p>
-        Connect the account signed in to Claude desktop to see subscription
-        limits. Token totals in your reports come from local transcripts.
-      </p>
-      {error && (
-        <div className="inline-error" role="alert">
-          {error}
-        </div>
-      )}
-      <div className="connection-actions">
-        <button
-          className="button primary"
-          disabled={Boolean(busy)}
-          onClick={connect}
-        >
-          {busy === "refresh" ? (
-            <LoaderCircle size={14} className="spin" />
-          ) : (
-            <Plug size={14} />
-          )}{" "}
-          {busy === "refresh"
-            ? "Checking Claude usage…"
-            : connected ? "Refresh Claude usage" : "Connect Claude desktop"}
-        </button>
-        <button
-          className="text-button"
-          disabled={Boolean(busy)}
-          onClick={() =>
-            run("opening", () => api.openExternal("https://claude.ai/settings/usage"))
-          }
-        >
-          View in Claude <ExternalLink size={14} />
-        </button>
-        {connected && (
-          <button className="text-button" disabled={Boolean(busy)} onClick={disconnect}>
-            {busy === "disconnect" ? "Disconnecting…" : "Disconnect"}
-          </button>
-        )}
+    <div className="connection-section">
+      <div className="connection-grid">
+        <ClaudeDesktopCard epoch={epoch} />
+        <AntigravityCard epoch={epoch} refresh={refresh} />
+        <OpenRouterCard epoch={epoch} />
       </div>
-      {busy === "loading" && (
-        <p className="connection-detail" role="status">
-          Checking the desktop sign-in and saved plan usage…
-        </p>
-      )}
-      {!busy && !connected && (
-        <p className="connection-detail">
-          {state?.detected
-            ? "Your desktop sign-in is available. Connect to check current limits."
-            : "Open Claude desktop and sign in, then connect here."}
-        </p>
-      )}
-      <div className="connection-quota">
-        {(
-          state?.metrics ||
-          (latest
-            ? [
-                { label: "5-hour usage", used_percent: latest.fiveHour },
-                { label: "Weekly usage", used_percent: latest.sevenDay },
-              ]
-            : [])
-        )
-          .filter((row) => Number.isFinite(row.used_percent))
-          .map((row, index) => (
-            <div key={index}>
-              <span>
-                {row.label}
-                {row.resets_at && (
-                  <small>
-                    Resets {timestamp(row.resets_at)}
-                  </small>
-                )}
-              </span>
-              <b>{row.used_percent.toFixed(1)}% used</b>
-              <progress
-                max="100"
-                value={Math.max(0, Math.min(100, row.used_percent))}
-                aria-label={row.label}
-              />
-            </div>
-          ))}
-      </div>
-      {state?.spend && (
-        <p className="connection-detail">
-          Extra usage: {dollars(state.spend.spent)} of{" "}
-          {dollars(state.spend.limit)}
-        </p>
-      )}
-      {points.length > 1 && (
-        <div className="connection-history">
-          <div>
-            <b>Saved plan history</b>
-            <span>{points.length} recent snapshots</span>
-          </div>
-          <svg
-            viewBox="0 0 400 100"
-            role="img"
-            aria-label="Claude desktop cached five-hour and weekly usage history"
-          >
-            <path
-              d="M0 95H400 M0 50H400 M0 5H400"
-              stroke="var(--line)"
-              fill="none"
-            />
-            {[
-              ["fiveHour", "var(--violet)"],
-              ["sevenDay", "var(--lime)"],
-            ].map(([field, color]) => (
-              <polyline
-                key={field}
-                fill="none"
-                stroke={color}
-                strokeWidth="2"
-                points={points
-                  .filter((point) => Number.isFinite(point[field]))
-                  .map(
-                    (point) =>
-                      `${((point.timestamp - start) / duration) * 400},${95 - Math.min(100, Math.max(0, point[field])) * 0.9}`,
-                  )
-                  .join(" ")}
-              />
-            ))}
-          </svg>
-          <p>
-            <span style={{ color: "var(--violet)" }}>5-hour usage</span> ·{" "}
-            <span style={{ color: "var(--lime)" }}>Weekly usage</span>
-          </p>
-          <p>
-            {timestamp(points[0].timestamp)} – {timestamp(points.at(-1).timestamp)}
-            {" "}· 0–100% plan utilization
-          </p>
-        </div>
-      )}
-      <p className="connection-detail">
-        {state?.checkedAt
-          ? `${error ? "Last successful limit check" : "Live limits checked"} ${timestamp(state.checkedAt)}. `
-          : latest
-            ? `Cached desktop snapshot from ${timestamp(latest.timestamp)}. `
-            : ""}
-        Desktop sign-in is read locally; credentials are sent only to Anthropic.
-        Saved history shows plan utilization, separate from transcript token
-        counts.
-        {connected &&
-          " Disconnect stops this app’s usage checks and keeps your Claude sign-in."}
-      </p>
-    </Card>
+    </div>
   );
 }
