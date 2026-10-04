@@ -81,6 +81,8 @@ function settings(value) {
         throw new Error("Invalid preference");
       result[key] = value[key];
     }
+  if (value.theme !== undefined && !['dark','light','system'].includes(value.theme)) throw new Error('Unknown appearance setting');
+  if (value.defaultPeriod !== undefined && !['today','yesterday','week','month','all'].includes(value.defaultPeriod)) throw new Error('Unknown default date range');
   for (const key of [
     "launchAtLogin",
     "minimizeToTray",

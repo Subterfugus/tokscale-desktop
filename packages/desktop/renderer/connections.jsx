@@ -1,19 +1,51 @@
-import React, { useEffect, useState } from "react";
-import {
-  Check,
-  RefreshCw,
-  ExternalLink,
-  Plug,
-  LoaderCircle,
-} from "lucide-react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { RefreshCw, ExternalLink, Plug, LoaderCircle } from "lucide-react";
 const api = window.tokscale;
 const dollars = (value) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(
     value,
   );
-function Card({ name, badge, children }) {
+const timestamp = (value) => {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toLocaleString() : "Unavailable";
+};
+
+// A newer request or an unmount must invalidate previous async UI updates.
+// In particular, a late automatic refresh must not undo a disconnect.
+function useConnectionRequest() {
+  const revision = useRef(0);
+  const [busy, setBusy] = useState("loading"),
+    [error, setError] = useState("");
+  const cancel = useCallback(() => {
+    revision.current += 1;
+  }, []);
+  const run = useCallback(async (name, work) => {
+    const request = ++revision.current;
+    const update = (callback) => {
+      if (revision.current === request) callback();
+    };
+    setBusy(name);
+    setError("");
+    try {
+      await work(update);
+    } catch (e) {
+      update(() =>
+        setError(
+          String(e?.message || "The connection could not be completed. Try again.")
+            .replace(/(Bearer\s+)[^\s]+/gi, "$1[hidden]")
+            .replace(/sk-or-[A-Za-z0-9_-]+/g, "[hidden key]"),
+        ),
+      );
+    } finally {
+      update(() => setBusy(""));
+    }
+  }, []);
+  return { busy, error, run, cancel, clearError: () => setError("") };
+}
+
+function Card({ name, badge, busy, children }) {
   return (
-    <section className="panel connection-card">
+    <section className="panel connection-card" aria-busy={Boolean(busy)}>
       <div className="panel-head">
         <div>
           <span className="connection-eyebrow">ACCOUNT CONNECTION</span>
@@ -28,50 +60,53 @@ function Card({ name, badge, children }) {
 export function OpenRouterCard({ epoch }) {
   const [state, setState] = useState(null),
     [key, setKey] = useState(""),
-    [editing, setEditing] = useState(false),
-    [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
+    [editing, setEditing] = useState(false);
+  const { busy, error, run, cancel, clearError } = useConnectionRequest();
+  const lastEpoch = useRef(epoch);
   useEffect(() => {
-    let alive = true;
-    api
-      .openRouterStatus()
-      .then(async (status) => {
-        if (alive) setState(status);
-        if (status.connected) {
-          const result = await api.openRouterRefresh();
-          if (alive) setState(result);
-        }
-      })
-      .catch((e) => {
-        if (alive) setError(e.message);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [epoch]);
+    const force = lastEpoch.current !== epoch;
+    lastEpoch.current = epoch;
+    run("loading", async (update) => {
+      const status = await api.openRouterStatus();
+      update(() =>
+        setState((previous) =>
+          status.connected ? { ...previous, ...status } : status,
+        ),
+      );
+      if (status.connected) {
+        const result = await api.openRouterRefresh({ force });
+        update(() => setState(result));
+      }
+    });
+    return cancel;
+  }, [epoch, run, cancel]);
   async function action(kind) {
-    setBusy(true);
-    setError("");
-    try {
+    await run(kind, async (update) => {
       const result =
         kind === "connect"
           ? await api.openRouterConnect(key)
           : kind === "disconnect"
             ? await api.openRouterDisconnect()
-            : await api.openRouterRefresh();
-      setState(result);
-      setEditing(false);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
+            : await api.openRouterRefresh({ force: true });
+      update(() => {
+        setState(result);
+        setEditing(false);
+      });
+    });
+    // Never retain credentials after submitting, including a failed request.
+    if (kind === "connect") {
       setKey("");
     }
   }
   return (
     <Card
       name="OpenRouter"
-      badge={state?.connected ? "Key saved" : "Connect account"}
+      busy={busy}
+      badge={
+        busy === "loading"
+          ? "Checking connection…"
+          : state?.connected ? "Key saved" : "Connect account"
+      }
     >
       <p>
         See your account credit balance and actual spending, across all your
@@ -95,8 +130,9 @@ export function OpenRouterCard({ epoch }) {
       )}
       {state?.checkedAt && (
         <p className="connection-detail">
-          Checked {new Date(state.checkedAt).toLocaleTimeString()} · account
-          totals, separate from local estimated costs
+          {error ? "Last successful check" : "Checked"}{" "}
+          {timestamp(state.checkedAt)} · account totals, separate from local
+          estimated costs and the report date filter
         </p>
       )}
       {error && (
@@ -104,7 +140,12 @@ export function OpenRouterCard({ epoch }) {
           {error}
         </div>
       )}
-      {(!state?.connected || editing) && (
+      {busy === "loading" && !state && (
+        <p className="connection-detail" role="status">
+          Checking the saved connection…
+        </p>
+      )}
+      {(editing || (!state?.connected && busy !== "loading")) && (
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -121,7 +162,8 @@ export function OpenRouterCard({ epoch }) {
               placeholder="sk-or-…"
               autoComplete="off"
               spellCheck={false}
-              disabled={busy}
+              disabled={Boolean(busy)}
+              autoFocus={editing}
             />
           </label>
           <p className="connection-detail">
@@ -134,19 +176,22 @@ export function OpenRouterCard({ epoch }) {
               className="button primary"
               disabled={busy || !key.trim()}
             >
-              {busy ? (
+              {busy === "connect" ? (
                 <LoaderCircle size={14} className="spin" />
               ) : (
                 <Plug size={14} />
               )}{" "}
-              Connect OpenRouter
+              {busy === "connect"
+                ? "Connecting…"
+                : editing ? "Save replacement key" : "Connect OpenRouter"}
             </button>
             <button
               type="button"
               className="button"
+              disabled={Boolean(busy)}
               onClick={() =>
-                api.openExternal(
-                  "https://openrouter.ai/settings/provisioning-keys",
+                run("opening", () =>
+                  api.openExternal("https://openrouter.ai/settings/provisioning-keys"),
                 )
               }
             >
@@ -156,7 +201,12 @@ export function OpenRouterCard({ epoch }) {
               <button
                 type="button"
                 className="text-button"
-                onClick={() => setEditing(false)}
+                disabled={Boolean(busy)}
+                onClick={() => {
+                  setEditing(false);
+                  setKey("");
+                  clearError();
+                }}
               >
                 Cancel
               </button>
@@ -168,28 +218,39 @@ export function OpenRouterCard({ epoch }) {
         <div className="connection-actions">
           <button
             className="button"
-            disabled={busy}
+            disabled={Boolean(busy)}
             onClick={() => action("refresh")}
           >
-            <RefreshCw size={14} /> Refresh balance
+            {busy === "refresh" ? (
+              <LoaderCircle size={14} className="spin" />
+            ) : (
+              <RefreshCw size={14} />
+            )}{" "}
+            {busy === "refresh" ? "Refreshing…" : "Refresh balance"}
           </button>
           <button
             className="button"
-            disabled={busy}
-            onClick={() => setEditing(true)}
+            disabled={Boolean(busy)}
+            onClick={() => {
+              setEditing(true);
+              clearError();
+            }}
           >
             Replace key
           </button>
           <button
             className="text-button"
-            disabled={busy}
+            disabled={Boolean(busy)}
             onClick={() => action("disconnect")}
           >
-            Disconnect
+            {busy === "disconnect" ? "Disconnecting…" : "Disconnect"}
           </button>
           <button
             className="text-button"
-            onClick={() => api.openExternal("https://openrouter.ai/activity")}
+            disabled={Boolean(busy)}
+            onClick={() =>
+              run("opening", () => api.openExternal("https://openrouter.ai/activity"))
+            }
           >
             View usage details <ExternalLink size={14} />
           </button>
@@ -200,55 +261,45 @@ export function OpenRouterCard({ epoch }) {
 }
 export function ConnectionCards({ epoch, refresh }) {
   const [gravity, setGravity] = useState(null),
-    [busy, setBusy] = useState(""),
-    [error, setError] = useState({}),
-    [message, setMessage] = useState({});
+    [message, setMessage] = useState("");
+  const { busy, error, run, cancel } = useConnectionRequest();
   useEffect(() => {
-    let alive = true;
-    api
-      .providerAction("antigravity-status")
-      .then((value) => {
-        if (alive) setGravity(value);
-      })
-      .catch((e) => {
-        if (alive) setError((old) => ({ ...old, antigravity: e.message }));
-      });
-    return () => {
-      alive = false;
-    };
-  }, [epoch]);
-  async function run(provider, action) {
-    setBusy(provider);
-    setError((old) => ({ ...old, [provider]: "" }));
-    try {
+    run("loading", async (update) => {
+      const status = await api.providerAction("antigravity-status");
+      update(() => setGravity(status));
+    });
+    return cancel;
+  }, [epoch, run, cancel]);
+  async function action(action) {
+    setMessage("");
+    await run(action, async (update) => {
       const value = await api.providerAction(action);
       if (action === "antigravity-status" || action === "antigravity-sync") {
-        setGravity(
+        const status =
           action === "antigravity-status"
             ? value
-            : await api.providerAction("antigravity-status"),
-        );
+            : await api.providerAction("antigravity-status");
+        update(() => setGravity(status));
         if (action === "antigravity-sync") {
-          setMessage((old) => ({
-            ...old,
-            antigravity: "Sync finished. Local reports have been refreshed.",
-          }));
-          refresh();
+          update(() => {
+            setMessage("Sync finished. Local reports have been refreshed.");
+            refresh();
+          });
+        } else {
+          update(() =>
+            setMessage(
+              status.detectedConnections
+                ? "Antigravity is running. You can sync its usage now."
+                : "No running service found. Open Antigravity, sign in, then detect again.",
+            ),
+          );
         }
       }
       if (action === "antigravity-open")
-        setMessage((old) => ({
-          ...old,
-          antigravity: "Sign in inside Antigravity, then click Detect.",
-        }));
-    } catch (e) {
-      setError((old) => ({
-        ...old,
-        [provider]: e.message.replace(/(Bearer\s+)[^\s]+/gi, "$1[hidden]"),
-      }));
-    } finally {
-      setBusy("");
-    }
+        update(() =>
+          setMessage("Sign in inside Antigravity, then click Detect."),
+        );
+    });
   }
   return (
     <div className="connection-section">
@@ -260,10 +311,15 @@ export function ConnectionCards({ epoch, refresh }) {
         <ClaudeDesktopCard epoch={epoch} />
         <Card
           name="Antigravity"
+          busy={busy}
           badge={
-            gravity?.detectedConnections
-              ? "Running · detected"
-              : "Open app to connect"
+            busy === "loading"
+              ? "Checking local service…"
+              : gravity?.detectedConnections
+                ? "Running · detected"
+                : gravity?.cachedSessions
+                  ? "Saved usage available"
+                  : "Open app to connect"
           }
         >
           <p>
@@ -275,7 +331,7 @@ export function ConnectionCards({ epoch, refresh }) {
             <span>cached sessions</span>
             {gravity?.lastSyncedAt && (
               <small>
-                Last sync {new Date(gravity.lastSyncedAt).toLocaleString()}
+                Last sync {timestamp(gravity.lastSyncedAt)}
               </small>
             )}
           </div>
@@ -283,38 +339,52 @@ export function ConnectionCards({ epoch, refresh }) {
             <button
               className="button"
               disabled={Boolean(busy)}
-              onClick={() => run("antigravity", "antigravity-open")}
+              onClick={() => action("antigravity-open")}
             >
               Open Antigravity
             </button>
             <button
               className="button"
               disabled={Boolean(busy)}
-              onClick={() => run("antigravity", "antigravity-status")}
+              onClick={() => action("antigravity-status")}
             >
+              {busy === "antigravity-status" && (
+                <LoaderCircle size={14} className="spin" />
+              )}{" "}
               Detect
             </button>
             <button
               className="button primary"
               disabled={Boolean(busy) || !gravity?.detectedConnections}
-              onClick={() => run("antigravity", "antigravity-sync")}
+              onClick={() => action("antigravity-sync")}
             >
-              {busy === "antigravity" ? (
+              {busy === "antigravity-sync" ? (
                 <LoaderCircle size={14} className="spin" />
               ) : (
                 <RefreshCw size={14} />
               )}{" "}
-              Sync usage
+              {busy === "antigravity-sync" ? "Syncing usage…" : "Sync usage"}
             </button>
           </div>
-          {message.antigravity && (
+          {busy === "loading" && (
             <p className="connection-detail" role="status">
-              {message.antigravity}
+              Checking for Antigravity’s local service…
             </p>
           )}
-          {error.antigravity && (
+          {!busy && gravity && !gravity.detectedConnections && (
+            <p className="connection-detail">
+              Sync becomes available when Antigravity is open and its local
+              service is detected.
+            </p>
+          )}
+          {message && (
+            <p className="connection-detail" role="status">
+              {message}
+            </p>
+          )}
+          {error && (
             <div className="inline-error" role="alert">
-              {error.antigravity}
+              {error}
             </div>
           )}
           <p className="connection-detail">
@@ -330,55 +400,53 @@ export function ConnectionCards({ epoch, refresh }) {
 
 export function ClaudeDesktopCard({ epoch }) {
   const [state, setState] = useState(null),
-    [busy, setBusy] = useState(false),
-    [error, setError] = useState(""),
     [connected, setConnected] = useState(false);
+  const { busy, error, run, cancel } = useConnectionRequest();
+  const lastEpoch = useRef(epoch);
   useEffect(() => {
-    let alive = true;
-    Promise.all([api.claudeDesktopStatus(), api.connectionStatus()])
-      .then(async ([status, info]) => {
-        if (alive) {
-          setState(status);
-          setConnected(info.claudeDesktopConnected);
-        }
-        if (info.claudeDesktopConnected) {
-          const result = await api.claudeDesktopRefresh();
-          if (alive) setState(result);
-        }
-      })
-      .catch((e) => {
-        if (alive) setError(e.message);
+    const force = lastEpoch.current !== epoch;
+    lastEpoch.current = epoch;
+    run("loading", async (update) => {
+      const [status, info] = await Promise.all([
+        api.claudeDesktopStatus(),
+        api.connectionStatus(),
+      ]);
+      update(() => {
+        setState((previous) =>
+          info.claudeDesktopConnected ? { ...previous, ...status } : status,
+        );
+        setConnected(info.claudeDesktopConnected);
       });
-    return () => {
-      alive = false;
-    };
-  }, [epoch]);
+      if (info.claudeDesktopConnected) {
+        const result = await api.claudeDesktopRefresh({ force });
+        update(() => setState(result));
+      }
+    });
+    return cancel;
+  }, [epoch, run, cancel]);
   async function connect() {
-    setBusy(true);
-    setError("");
-    try {
-      setState(await api.claudeDesktopRefresh());
-      setConnected(true);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
+    await run("refresh", async (update) => {
+      const result = await api.claudeDesktopRefresh({ force: true });
+      update(() => {
+        setState(result);
+        setConnected(true);
+      });
+    });
   }
   async function disconnect() {
-    setBusy(true);
-    try {
+    await run("disconnect", async (update) => {
       await api.claudeDesktopDisconnect();
-      setConnected(false);
-      setState(await api.claudeDesktopStatus());
-      setError("");
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
+      update(() => {
+        setConnected(false);
+        setState(null);
+      });
+      const status = await api.claudeDesktopStatus();
+      update(() => setState(status));
+    });
   }
-  const samples = state?.samples || [],
+  const samples = (state?.samples || [])
+      .filter((sample) => Number.isFinite(sample.timestamp))
+      .sort((a, b) => a.timestamp - b.timestamp),
     latest = samples.at(-1);
   const points = samples.slice(-40),
     start = points[0]?.timestamp || 0,
@@ -386,19 +454,20 @@ export function ClaudeDesktopCard({ epoch }) {
   return (
     <Card
       name="Claude desktop"
+      busy={busy}
       badge={
-        state?.checkedAt
-          ? error
-            ? "Last successful usage"
-            : "Live usage"
-          : state?.detected
-            ? "Desktop sign-in found"
-            : "Sign in to Claude"
+        busy === "loading"
+          ? "Checking desktop sign-in…"
+          : connected && state?.checkedAt
+            ? error ? "Last successful usage" : "Live usage"
+            : latest
+              ? "Saved plan usage"
+              : state?.detected ? "Desktop sign-in found" : "Sign in to Claude"
       }
     >
       <p>
-        Use the account already signed in to the Claude desktop app. One click
-        reads its subscription limits and saved plan usage history.
+        Connect the account signed in to Claude desktop to see subscription
+        limits. Token totals in your reports come from local transcripts.
       </p>
       {error && (
         <div className="inline-error" role="alert">
@@ -406,26 +475,47 @@ export function ClaudeDesktopCard({ epoch }) {
         </div>
       )}
       <div className="connection-actions">
-        <button className="button primary" disabled={busy} onClick={connect}>
-          {busy ? (
+        <button
+          className="button primary"
+          disabled={Boolean(busy)}
+          onClick={connect}
+        >
+          {busy === "refresh" ? (
             <LoaderCircle size={14} className="spin" />
           ) : (
             <Plug size={14} />
           )}{" "}
-          {connected ? "Refresh Claude usage" : "Connect Claude desktop"}
+          {busy === "refresh"
+            ? "Checking Claude usage…"
+            : connected ? "Refresh Claude usage" : "Connect Claude desktop"}
         </button>
         <button
           className="text-button"
-          onClick={() => api.openExternal("https://claude.ai/settings/usage")}
+          disabled={Boolean(busy)}
+          onClick={() =>
+            run("opening", () => api.openExternal("https://claude.ai/settings/usage"))
+          }
         >
           View in Claude <ExternalLink size={14} />
         </button>
         {connected && (
-          <button className="text-button" disabled={busy} onClick={disconnect}>
-            Disconnect
+          <button className="text-button" disabled={Boolean(busy)} onClick={disconnect}>
+            {busy === "disconnect" ? "Disconnecting…" : "Disconnect"}
           </button>
         )}
       </div>
+      {busy === "loading" && (
+        <p className="connection-detail" role="status">
+          Checking the desktop sign-in and saved plan usage…
+        </p>
+      )}
+      {!busy && !connected && (
+        <p className="connection-detail">
+          {state?.detected
+            ? "Your desktop sign-in is available. Connect to check current limits."
+            : "Open Claude desktop and sign in, then connect here."}
+        </p>
+      )}
       <div className="connection-quota">
         {(
           state?.metrics ||
@@ -443,14 +533,14 @@ export function ClaudeDesktopCard({ epoch }) {
                 {row.label}
                 {row.resets_at && (
                   <small>
-                    Resets {new Date(row.resets_at).toLocaleString()}
+                    Resets {timestamp(row.resets_at)}
                   </small>
                 )}
               </span>
               <b>{row.used_percent.toFixed(1)}% used</b>
               <progress
                 max="100"
-                value={row.used_percent}
+                value={Math.max(0, Math.min(100, row.used_percent))}
                 aria-label={row.label}
               />
             </div>
@@ -466,7 +556,7 @@ export function ClaudeDesktopCard({ epoch }) {
         <div className="connection-history">
           <div>
             <b>Saved plan history</b>
-            <span>{samples.length} snapshots</span>
+            <span>{points.length} recent snapshots</span>
           </div>
           <svg
             viewBox="0 0 400 100"
@@ -488,7 +578,7 @@ export function ClaudeDesktopCard({ epoch }) {
                 stroke={color}
                 strokeWidth="2"
                 points={points
-                  .filter((point) => point[field] != null)
+                  .filter((point) => Number.isFinite(point[field]))
                   .map(
                     (point) =>
                       `${((point.timestamp - start) / duration) * 400},${95 - Math.min(100, Math.max(0, point[field])) * 0.9}`,
@@ -497,18 +587,27 @@ export function ClaudeDesktopCard({ epoch }) {
               />
             ))}
           </svg>
-          <p>5-hour usage · weekly usage</p>
+          <p>
+            <span style={{ color: "var(--violet)" }}>5-hour usage</span> ·{" "}
+            <span style={{ color: "var(--lime)" }}>Weekly usage</span>
+          </p>
+          <p>
+            {timestamp(points[0].timestamp)} – {timestamp(points.at(-1).timestamp)}
+            {" "}· 0–100% plan utilization
+          </p>
         </div>
       )}
       <p className="connection-detail">
         {state?.checkedAt
-          ? `${error ? "Last successful limit check" : "Live limits checked"} ${new Date(state.checkedAt).toLocaleTimeString()}. `
+          ? `${error ? "Last successful limit check" : "Live limits checked"} ${timestamp(state.checkedAt)}. `
           : latest
-            ? `Cached desktop snapshot from ${new Date(latest.timestamp).toLocaleString()}. `
+            ? `Cached desktop snapshot from ${timestamp(latest.timestamp)}. `
             : ""}
         Desktop sign-in is read locally; credentials are sent only to Anthropic.
         Saved history shows plan utilization, separate from transcript token
         counts.
+        {connected &&
+          " Disconnect stops this app’s usage checks and keeps your Claude sign-in."}
       </p>
     </Card>
   );

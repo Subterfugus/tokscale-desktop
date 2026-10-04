@@ -14,11 +14,13 @@ The application runs in a Windows window and loads its interface from bundled fi
 | Subscription quotas | Original provider quota data, reset times, account labels, credits and spending controls when returned |
 | Models | All six groupings, searchable and sortable rows, expanded source fields, worktree merging, JSON exports |
 | Activity | Monthly and hourly reports, client and date filters |
-| Projects & sessions | Model aggregates by workspace or session, with original TUI access for session titles and project timelines |
+| Projects & sessions | Saved Codex chat names, compact session/model rows, folder grouping, searchable details, and original TUI access |
 | Insights | Contribution calendar, token averages, active-time measurements |
 | Integrations | Source discovery, account setup commands and original integration workflows |
 | Command center | Original interactive TUI, editable CLI arguments, command discovery, native terminal fallback |
 | Settings | Dark/light/system themes, refresh intervals, report home, desktop preferences |
+
+Version 0.3 improves readability, contrast, smaller-window layouts, and table navigation. Projects starts with sessions; saved Codex names come from its local read-only index and use the current name before the initial title. Sessions without saved names show as untitled. Workspace grouping remains available for folder aggregates. Custom dates apply after validation, and every report shows the selected dates explicitly. Overview exposes every token bucket; Insights preserves calendar gaps and computes the daily average across the recorded calendar span. Ctrl+K opens Command center.
 
 ## Connect Claude desktop, Antigravity, and OpenRouter
 

@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 
 // Runs only in --desktop-smoke, against generated local sessions without auth.
 // These exercise the actual bundled React renderer and native bridge.
-async function runUiChecks({ window, output }) {
+async function runUiChecks({ window, output, terminalCount }) {
   const checks = [];
   const exec = async (fn, arg) => {
     const result = await window.webContents.executeJavaScript(
@@ -46,6 +46,18 @@ async function runUiChecks({ window, output }) {
       null,
       "Report did not load",
     );
+  const connectionsReady = () => wait(
+    () => !document.querySelector('.connection-card[aria-busy="true"]'),
+    null,
+    "Account cards did not finish checking their connections",
+  );
+  const setInput = (selector, value) => exec(({selector, value}) => {
+    const input = document.querySelector(selector);
+    if (!input) throw new Error(`Missing input: ${selector}`);
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, value);
+    input.dispatchEvent(new Event("input", {bubbles:true}));
+    input.dispatchEvent(new Event("change", {bubbles:true}));
+  }, {selector,value});
   const snapshot = async (name) => {
     // DOM updates precede Chromium paint; capture the page that was asserted.
     await exec(
@@ -68,6 +80,10 @@ async function runUiChecks({ window, output }) {
       label,
     );
     await ready();
+    assert.equal(await exec(() => {
+      const button = document.querySelector('.sidebar button.active');
+      return (button?.querySelector(':scope > span:not(.nav-key)')?.innerText || button?.innerText)?.trim();
+    }), label, "Navigation highlight does not match the displayed page");
   };
 
   await click(".period-tabs button", "All time");
@@ -190,9 +206,45 @@ async function runUiChecks({ window, output }) {
     "All six model groupings preserve the original total and expose their grouping fields",
   );
 
+  const expandedRow = await exec(() => {
+    const row = document.querySelector(".content tbody tr");
+    const text = row.innerText;
+    row.querySelector('button[aria-label="Show row details"]').click();
+    return text;
+  });
+  await wait(() => document.querySelector(".detail-row"));
+  await click(".content thead button", "Input");
+  assert.equal(await exec(() => document.querySelector(".selected-row")?.innerText), expandedRow,
+    "Sorting attached expanded details to a different row");
+  checks.push("Expanded row details remain attached to the same record after sorting");
+
+  await click(".period-tabs button", "Custom");
+  await setInput('input[aria-label="Start date"]', "2026-10-03");
+  await setInput('input[aria-label="End date"]', "2026-09-24");
+  await click(".custom-filters button", "Apply range");
+  await wait(() => document.querySelector(".filter-error"));
+  assert.match(await exec(() => document.querySelector(".filter-summary").innerText), /All recorded history/);
+  await setInput('input[aria-label="Start date"]', "2026-09-24");
+  await setInput('input[aria-label="End date"]', "2026-10-03");
+  await click(".custom-filters button", "Apply range");
+  await wait(() => !document.querySelector(".custom-filters") && document.querySelector(".filter-summary")?.innerText.includes("Sep 24"));
+  await ready();
+  await click(".period-tabs button", "All time");
+  await ready();
+  checks.push("Custom date ranges apply explicitly; reversed ranges keep the current report intact");
+
   await nav("Activity");
   await snapshot("activity");
   await nav("Projects & sessions");
+  await wait(() => document.querySelector(".content table")?.innerText.includes("Atlas planning"));
+  const projectsText = await exec(() => document.querySelector(".content table").innerText);
+  assert.match(projectsText, /Beacon planning/);
+  assert.doesNotMatch(projectsText, /Initial synthetic prompt/);
+  assert.match(await exec(() => document.querySelector(".view-toolbar select").value), /session/);
+  await setInput('input[aria-label="Search report"]', "Atlas planning");
+  await wait(() => !document.querySelector(".content table")?.innerText.includes("Beacon planning"));
+  await setInput('input[aria-label="Search report"]', "");
+  checks.push("Projects opens with sessions and uses searchable saved Codex chat names rather than initial prompts");
   await snapshot("projects");
   await nav("Insights");
   await snapshot("insights");
@@ -205,6 +257,7 @@ async function runUiChecks({ window, output }) {
     "History, project grouping, and contribution insights render with correct token average",
   );
   await nav("Subscription quotas");
+  await connectionsReady();
   await snapshot("quotas");
   const quotaText = await exec(
     () => document.querySelector(".content").innerText,
@@ -215,6 +268,7 @@ async function runUiChecks({ window, output }) {
     "Unauthenticated synthetic quota output is represented without inventing account limits",
   );
   await nav("Integrations");
+  await connectionsReady();
   await snapshot("integrations");
   const connectionText = await exec(
     () => document.querySelector(".connection-section").innerText,
@@ -228,6 +282,7 @@ async function runUiChecks({ window, output }) {
       .querySelector(".connection-card")
       ?.innerText.includes("25.0% used"),
   );
+  await connectionsReady();
   await exec(() => {
     const input = document.querySelector(
       'input[aria-label="OpenRouter management key"]',
@@ -242,6 +297,7 @@ async function runUiChecks({ window, output }) {
   await wait(() =>
     document.querySelector(".connection-section")?.innerText.includes("$74.75"),
   );
+  await connectionsReady();
   assert.equal(
     await exec(
       () =>
@@ -251,8 +307,15 @@ async function runUiChecks({ window, output }) {
     "",
   );
   await snapshot("connections");
+  await click(".connection-card button", "Replace key");
+  await setInput('input[aria-label="OpenRouter management key"]', "sk-or-v1-FAKE_REPLACEMENT_SHOULD_BE_CLEARED");
+  await click(".connection-card button", "Cancel");
+  await click(".connection-card button", "Replace key");
+  assert.equal(await exec(() => document.querySelector('input[aria-label="OpenRouter management key"]').value), "");
+  await click(".connection-card button", "Cancel");
+  checks.push("Cancelling replacement clears the entered key and preserves the saved connection");
   await click(".connection-card button", "Detect");
-  await wait(() => !document.querySelector(".connection-section .spin"));
+  await connectionsReady();
   await click(".connection-card button", "Disconnect");
   await wait(() =>
     [...document.querySelectorAll(".connection-card button")].some(
@@ -261,10 +324,12 @@ async function runUiChecks({ window, output }) {
         !button.disabled,
     ),
   );
+  await connectionsReady();
   await click(".connection-card button", "Disconnect");
   await wait(() =>
     document.querySelector('input[aria-label="OpenRouter management key"]'),
   );
+  await connectionsReady();
   checks.push(
     "Desktop Claude connect, OpenRouter encrypted save/balance/disconnect and Antigravity detection work with synthetic provider replies",
   );
@@ -312,6 +377,13 @@ async function runUiChecks({ window, output }) {
   await finish();
   checks.push("Two successive quick commands finish and restore command input");
   await click(".command-line button", "Interactive TUI");
+  await wait(() => document.querySelector('button[aria-label="Stop current command"]'));
+  await exec(() => document.querySelector('button[aria-label="Stop current command"]').click());
+  for (let attempt = 0; attempt < 40 && terminalCount() > 0; attempt++) await new Promise(resolve => setTimeout(resolve, 250));
+  assert.equal(terminalCount(), 0, "Stopping during startup left a terminal running");
+  assert.match(await exec(() => document.querySelector(".terminal-top").innerText), /Stopped/);
+  checks.push("Stopping while the terminal is starting kills its late-returned session");
+  await click(".command-line button", "Interactive TUI");
   await wait(
     () =>
       document.querySelector(".terminal-top")?.innerText.includes("Running") ||
@@ -339,6 +411,27 @@ async function runUiChecks({ window, output }) {
     "Embedded original TUI keeps its session across desktop navigation and stops explicitly",
   );
   await nav("Overview");
+  const originalSize = window.getSize();
+  window.setSize(1050, 720);
+  await snapshot("overview-compact");
+  const layout = await exec(() => {
+    const bounds = (selector) => {
+      const rect = document.querySelector(selector).getBoundingClientRect();
+      return {left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom};
+    };
+    return {viewport:innerWidth, filter:bounds(".filterbar"), sidebar:bounds(".sidebar"), content:bounds(".content"), bodyOverflow:document.documentElement.scrollWidth > innerWidth};
+  });
+  assert.equal(layout.bodyOverflow, false, "Window layout overflows horizontally at minimum supported size");
+  assert.ok(layout.filter.right <= layout.viewport + 1);
+  await nav("Projects & sessions");
+  await snapshot("projects-compact");
+  await nav("Integrations");
+  await connectionsReady();
+  await snapshot("connections-compact");
+  assert.equal(await exec(() => [...document.querySelectorAll(".connection-card")].some(card=>card.getBoundingClientRect().right > innerWidth)), false);
+  window.setSize(...originalSize);
+  await nav("Overview");
+  checks.push("Overview, sessions, and account cards fit the minimum window size without horizontal page overflow");
   return {
     passed: checks,
     fixture: "Generated Codex/Claude sessions; no real credentials",

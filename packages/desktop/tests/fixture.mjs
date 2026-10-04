@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 // Fixed, invented activity: 40 sessions, 160 messages, 5,446,000 tokens.
 // No credentials, real conversation text, or provider account data.
@@ -16,6 +17,10 @@ export async function createFixture(home) {
   const iso = (time) => new Date(time).toISOString();
   const jsonl = (rows) =>
     rows.map((row) => JSON.stringify(row)).join("\n") + "\n";
+  // Codex's saved display name can differ from its initial prompt-derived title.
+  const index = new DatabaseSync(path.join(home, ".codex/state_5.sqlite"));
+  index.exec("CREATE TABLE IF NOT EXISTS threads (id TEXT PRIMARY KEY, title TEXT, name TEXT, rollout_path TEXT)");
+  const saveTitle = index.prepare("INSERT OR REPLACE INTO threads (id,title,name,rollout_path) VALUES (?,?,?,?)");
   for (let day = 0; day < 10; day++) {
     const date = Date.UTC(2026, 9, 3 - day);
     const stamp = iso(date).slice(0, 10);
@@ -23,6 +28,7 @@ export async function createFixture(home) {
       const id = `synthetic-codex-${stamp}-${session}`;
       const model = session === 0 ? "gpt-5.4" : "gpt-5.5";
       const cwd = session === 0 ? "C:/Demo/Atlas" : "C:/Demo/Beacon";
+      saveTitle.run(id, "Initial synthetic prompt rather than saved chat name", `${session === 0 ? "Atlas" : "Beacon"} planning · ${stamp}`, path.join(codexRoot, `rollout-${id}.jsonl`));
       let time = date + (15 + session * 3) * 3600000;
       const rows = [
         {
@@ -117,4 +123,5 @@ export async function createFixture(home) {
       );
     }
   }
+  index.close();
 }

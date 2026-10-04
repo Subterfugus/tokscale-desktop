@@ -19,6 +19,9 @@ const security = require("./security.cjs");
 const { runCommand } = require("./runner.cjs");
 const { createOpenRouter } = require("./accounts.cjs");
 const { createClaudeDesktop } = require("./claude-desktop.cjs");
+const { createProviderCache } = require("./provider-cache.cjs");
+const { getSessionTitles } = require("./session-titles.cjs");
+const { createPreferences } = require("./preferences.cjs");
 const pkg = require("../package.json");
 const enginePath = app.isPackaged
   ? path.join(process.resourcesPath, "engine", "tokscale.exe")
@@ -59,22 +62,9 @@ try {
 }
 const settingsPath = () =>
   path.join(app.getPath("userData"), "desktop-settings.json");
-let preferenceWrites = Promise.resolve();
+let preferenceStore;
 function savePreferences(patch) {
-  const task = preferenceWrites.then(async () => {
-    const merged = { ...preferences, ...patch };
-    await fs.mkdir(app.getPath("userData"), { recursive: true });
-    const temp = settingsPath() + "." + randomUUID() + ".tmp";
-    try {
-      await fs.writeFile(temp, JSON.stringify(merged, null, 2), "utf8");
-      await fs.rename(temp, settingsPath());
-      preferences = merged;
-    } finally {
-      await fs.rm(temp, { force: true });
-    }
-  });
-  preferenceWrites = task.catch(() => {});
-  return task;
+  return preferenceStore.save(patch).then(values => { preferences=values; settingsWarning=''; return values; });
 }
 const smoke = process.argv.includes("--desktop-smoke");
 const switchValue = (name) =>
@@ -118,12 +108,12 @@ function run(input) {
   });
 }
 function send(channel, payload) {
-  if (window && !window.isDestroyed())
+  if (window && !window.isDestroyed() && !window.webContents.isDestroyed())
     window.webContents.send("tokscale:" + channel, payload);
 }
 function stopAll() {
-  for (const child of runs) child.kill();
-  for (const terminal of terminals.values()) terminal.kill();
+  for (const child of runs) { try { child.kill(); } catch {} }
+  for (const terminal of terminals.values()) { try { terminal.kill(); } catch {} }
   terminals.clear();
 }
 function handle(name, callback) {
@@ -145,8 +135,10 @@ function terminal(id) {
 }
 function wireApi() {
   const claudeDesktop = createClaudeDesktop({ env: engineEnv() });
+  let claudeRevision = 0;
   handle("claudeDesktopStatus", () => claudeDesktop.status());
-  handle("claudeDesktopRefresh", async () => {
+  const claudeRequests = createProviderCache(async () => {
+    const attempt = claudeRevision;
     const result = smoke
       ? {
           detected: true,
@@ -162,11 +154,16 @@ function wireApi() {
           ],
         }
       : await claudeDesktop.refresh();
+    if (attempt !== claudeRevision) throw new Error('Claude was disconnected while refreshing.');
     // Retain consent to reuse the desktop sign-in, never a duplicate token.
     await savePreferences({ claudeDesktopConnected: true });
+    if (attempt !== claudeRevision) throw new Error('Claude was disconnected while refreshing.');
     return result;
   });
+  handle("claudeDesktopRefresh", (options) => claudeRequests.refresh(options));
   handle("claudeDesktopDisconnect", async () => {
+    claudeRevision++;
+    claudeRequests.invalidate();
     await savePreferences({ claudeDesktopConnected: false });
     return { connected: false };
   });
@@ -245,10 +242,20 @@ function wireApi() {
     }
     throw new Error("Unsupported connection action");
   });
+  const routerRequests = createProviderCache(() => openrouter.refresh());
   handle("openRouterStatus", () => openrouter.status());
-  handle("openRouterConnect", (key) => openrouter.connect(key));
-  handle("openRouterRefresh", () => openrouter.refresh());
-  handle("openRouterDisconnect", () => openrouter.disconnect());
+  handle("openRouterConnect", async (key) => {
+    routerRequests.invalidate();
+    const result = await openrouter.connect(key);
+    routerRequests.invalidate();
+    return result;
+  });
+  handle("openRouterRefresh", (options) => routerRequests.refresh(options));
+  handle("openRouterDisconnect", async () => {
+    routerRequests.invalidate();
+    return openrouter.disconnect();
+  });
+  handle("getSessionTitles", (home = '') => getSessionTitles(home, {env:engineEnv()}));
   handle("getInfo", () => ({
     version: pkg.version,
     engineVersion: "4.17.0",
@@ -285,7 +292,7 @@ function wireApi() {
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
-  handle("startTerminal", (options) => {
+  handle("startTerminal", async (options) => {
     if (!pty)
       throw new Error(
         "Embedded terminal is unavailable. Open the native terminal to use all Tokscale commands.",
@@ -316,12 +323,18 @@ function wireApi() {
       terminals.delete(id);
       send("terminalExit", { id, code: event.exitCode });
     });
+    // Exercise cancellation before a terminal ID reaches the renderer.
+    if (smoke) await new Promise(resolve => setTimeout(resolve, 350));
     return id;
   });
   handle("writeTerminal", (id, data) => {
     if (typeof data !== "string" || data.length > 1048576)
       throw new Error("Invalid terminal input");
-    terminal(id).write(data);
+    if (typeof id !== 'string') throw new Error('Invalid terminal');
+    const proc = terminals.get(id);
+    if (!proc) return;
+    try { proc.write(data); }
+    catch (error) { if (!/already exited/i.test(error.message)) throw error; }
   });
   handle("resizeTerminal", (id, cols, rows) => {
     const size = security.dimensions(cols, rows);
@@ -337,7 +350,8 @@ function wireApi() {
   });
   handle("stopTerminal", (id) => {
     if (typeof id !== "string") throw new Error("Invalid terminal");
-    if (terminals.has(id)) terminal(id).kill();
+    const proc = terminals.get(id);
+    if (proc) { try { proc.kill(); } catch (error) { if (!/already exited/i.test(error.message)) throw error; } }
   });
   handle("launchNative", async (input) => {
     const args = commandArgs(input, false);
@@ -403,7 +417,7 @@ function wireApi() {
     const home = next.home;
     if (home && !(await fs.stat(home)).isDirectory())
       throw new Error("Home must be a folder");
-    await savePreferences(next);
+    return savePreferences(next);
   });
   handle("windowControl", (action) => {
     if (!["minimize", "maximize", "close"].includes(action))
@@ -545,6 +559,7 @@ async function smokeTest() {
       window,
       output,
       fixtureHome: switchValue("--smoke-home"),
+      terminalCount: () => terminals.size,
     });
   await fs.writeFile(
     path.join(output, "desktop.png"),
@@ -583,19 +598,10 @@ else {
   app
     .whenReady()
     .then(async () => {
-      try {
-        preferences = {
-          ...preferences,
-          ...security.settings(
-            JSON.parse(await fs.readFile(settingsPath(), "utf8")),
-          ),
-        };
-      } catch (error) {
-        if (error.code !== "ENOENT")
-          settingsWarning =
-            "Desktop settings could not be read. Defaults are in use; your saved file has been preserved.";
-      }
-      if (smoke) preferences.home = switchValue("--smoke-home") || "";
+      preferenceStore = createPreferences(settingsPath(),preferences,security.settings);
+      const loaded = await preferenceStore.load();
+      preferences=loaded.values; settingsWarning=loaded.warning;
+      if (smoke) await savePreferences({home:switchValue("--smoke-home") || ""});
       Menu.setApplicationMenu(null);
       wireApi();
       await createWindow();

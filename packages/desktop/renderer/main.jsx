@@ -61,6 +61,10 @@ import {
   tokenTotal,
   modelTokenTotal,
   graphAverageTokens,
+  validateDateFilter,
+  filterTableRows,
+  reportRangeLabel,
+  calendarContributionCells,
 } from "./report-data.js";
 
 const api = window.tokscale;
@@ -98,7 +102,7 @@ const compact = (v) =>
 const pct = (v) => `${(Number(v) || 0).toFixed(1)}%`;
 const tokens = tokenTotal;
 const pretty = (s) =>
-  String(s || "Unknown")
+  (Array.isArray(s) ? s.map((item) => pretty(item)).join(" · ") : String(s || "Unknown"))
     .replace(/[-_]/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase());
 const dateLabel = (s) => {
@@ -124,7 +128,7 @@ const safeMessage = (s) =>
   );
 const cache = new Map();
 async function jsonRun(args) {
-  const r = await api.run(args);
+  const r = await api.run(["--no-spinner", ...args.filter((arg) => arg !== "--no-spinner")]);
   if (r.code !== 0)
     throw new Error(
       safeMessage(
@@ -142,6 +146,7 @@ async function jsonRun(args) {
 function useReport(args, epoch, enabled = true, graph = false) {
   const key = JSON.stringify([graph, args]);
   const [state, setState] = useState({
+    key,
     data: null,
     loading: true,
     error: null,
@@ -151,27 +156,31 @@ function useReport(args, epoch, enabled = true, graph = false) {
     let alive = true;
     const cached = cache.get(key);
     if (cached?.epoch === epoch && cached.data) {
-      setState({ data: cached.data, error: null, loading: false });
+      setState({ key, data: cached.data, error: null, loading: false });
       return;
     }
-    setState({ data: cached?.data || null, loading: true, error: null });
-    let task = cached?.promise;
-    if (task) cache.set(key, { ...cached, epoch });
+    setState({ key, data: cached?.data || null, loading: true, error: null });
+    let task = cached?.epoch === epoch ? cached?.promise : null;
     if (!task) {
       task = graph ? api.getGraph(args) : jsonRun(args);
       cache.set(key, { epoch, promise: task, data: cached?.data });
+      if (cache.size > 40) {
+        const oldest = [...cache].find(([oldKey, value]) => oldKey !== key && !value.promise);
+        if (oldest) cache.delete(oldest[0]);
+      }
     }
     task.then(
       (data) => {
         if (cache.get(key)?.promise === task)
           cache.set(key, { epoch: cache.get(key).epoch, data });
-        if (alive) setState({ data, error: null, loading: false });
+        if (alive) setState({ key, data, error: null, loading: false });
       },
       (error) => {
         if (cache.get(key)?.promise === task)
           cache.set(key, { epoch: -1, data: cached?.data });
         if (alive)
           setState({
+            key,
             data: cached?.data || null,
             loading: false,
             error: error.message,
@@ -182,7 +191,9 @@ function useReport(args, epoch, enabled = true, graph = false) {
       alive = false;
     };
   }, [key, epoch, enabled]);
-  return state;
+  // A different date/client selection must never flash the previous report
+  // under the new filter labels while its effect is being scheduled.
+  return state.key === key ? state : { key, data: null, loading: true, error: null };
 }
 function IconButton({ icon: Icon, label, onClick, ...props }) {
   return (
@@ -243,6 +254,7 @@ function ReportState({ state, children, onRetry }) {
     );
   return (
     <div className={state.loading ? "report refreshing" : "report"}>
+      {state.loading && <div className="refresh-indicator" role="status"><LoaderCircle className="spin" size={14} /> Refreshing this report…</div>}
       {error}
       {children}
       {state.data?.warnings?.length > 0 && (
@@ -292,9 +304,11 @@ function Metric({ label, value, detail, icon: Icon, color }) {
 }
 function Chart({ entries, metric = "cost", labelKey = "date", height = 200 }) {
   const [hover, setHover] = useState(null);
+  const chartLabel = (value) => labelKey === "hour" ? dateTime(value) : labelKey === "month" ? new Date(`${value}-01T12:00:00`).toLocaleDateString(undefined, { month: "short", year: "numeric" }) : dateLabel(value);
+  useEffect(() => setHover(null), [entries.length, labelKey, metric]);
   if (!entries.length) return <Empty />;
   const vals = entries.map((r) => Number(r[metric] ?? r.totals?.[metric] ?? 0));
-  const max = Math.max(...vals, 1);
+  const max = Math.max(...vals, 0) || 1;
   const width = 800,
     pad = 16,
     plotH = height - 42,
@@ -304,9 +318,9 @@ function Chart({ entries, metric = "cost", labelKey = "date", height = 200 }) {
       <div className="chart-label">
         {metric === "cost" ? "Estimated cost · USD" : "Tokens"}
         <strong>
-          {hover === null
+          {hover === null || !entries[hover]
             ? ""
-            : `${dateLabel(entries[hover][labelKey])} · ${metric === "cost" ? money(vals[hover]) : number(vals[hover])}`}
+            : `${chartLabel(entries[hover][labelKey])} · ${metric === "cost" ? money(vals[hover]) : number(vals[hover])}`}
         </strong>
       </div>
       <svg
@@ -334,7 +348,7 @@ function Chart({ entries, metric = "cost", labelKey = "date", height = 200 }) {
               x={pad}
               y={plotH - f * (plotH - 12) - 5}
               fill="var(--muted)"
-              fontSize="10"
+              fontSize="15"
             >
               {metric === "cost" ? money(max * f) : compact(max * f)}
             </text>
@@ -367,17 +381,17 @@ function Chart({ entries, metric = "cost", labelKey = "date", height = 200 }) {
             </g>
           );
         })}
-        <text x={pad} y={height - 5} fill="var(--muted)" fontSize="11">
-          {dateLabel(entries[0][labelKey])}
+        <text x={pad} y={height - 5} fill="var(--muted)" fontSize="15">
+          {chartLabel(entries[0][labelKey])}
         </text>
         <text
           x={width - pad}
           y={height - 5}
           textAnchor="end"
           fill="var(--muted)"
-          fontSize="11"
+          fontSize="15"
         >
-          {dateLabel(entries.at(-1)[labelKey])}
+          {chartLabel(entries.at(-1)[labelKey])}
         </text>
       </svg>
     </div>
@@ -460,28 +474,16 @@ function DataTable({ rows, columns, defaultSort = "cost", emptyText }) {
   const [search, setSearch] = useState(""),
     [sort, setSort] = useState(defaultSort),
     [direction, setDirection] = useState(-1),
-    [expanded, setExpanded] = useState(null);
+    [expanded, setExpanded] = useState(null),
+    [page, setPage] = useState(0);
+  const pageSize = 50;
   const filtered = useMemo(
-    () =>
-      rows
-        .filter((r) =>
-          Object.values(r)
-            .filter((v) => typeof v !== "object")
-            .join(" ")
-            .toLowerCase()
-            .includes(search.toLowerCase()),
-        )
-        .sort((a, b) => {
-          const av = a[sort] ?? 0,
-            bv = b[sort] ?? 0;
-          return (
-            (typeof av === "number"
-              ? av - bv
-              : String(av).localeCompare(String(bv))) * direction
-          );
-        }),
-    [rows, search, sort, direction],
+    () => filterTableRows(rows, columns, search, sort, direction),
+    [rows, columns, search, sort, direction],
   );
+  const currentPage = Math.min(page, Math.max(0, Math.ceil(filtered.length / pageSize) - 1));
+  const visibleRows = filtered.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+  useEffect(() => { setPage(0); setExpanded(null); }, [rows, search]);
   return (
     <>
       <div className="table-tools">
@@ -494,7 +496,7 @@ function DataTable({ rows, columns, defaultSort = "cost", emptyText }) {
             aria-label="Search report"
           />
         </label>
-        <span>{number(filtered.length)} rows</span>
+        <span>{number(filtered.length)}{search.trim() ? ` of ${number(rows.length)}` : ""} rows</span>
       </div>
       {!filtered.length ? (
         <Empty
@@ -507,11 +509,12 @@ function DataTable({ rows, columns, defaultSort = "cost", emptyText }) {
             <thead>
               <tr>
                 {columns.map((c) => (
-                  <th key={c.key}>
+                  <th key={c.key} className={c.numeric ? "numeric" : ""} aria-sort={sort === c.key ? direction < 0 ? "descending" : "ascending" : "none"}>
                     <button
                       onClick={() => {
                         setSort(c.key);
-                        setDirection(sort === c.key ? -direction : -1);
+                        setDirection(sort === c.key ? -direction : c.numeric ? -1 : 1);
+                        setPage(0);
                       }}
                     >
                       {c.label}
@@ -524,15 +527,15 @@ function DataTable({ rows, columns, defaultSort = "cost", emptyText }) {
                     </button>
                   </th>
                 ))}
-                <th />
+                <th><span className="sr-only">Details</span></th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map((r, i) => (
-                <React.Fragment key={i}>
+              {visibleRows.map((r) => (
+                <React.Fragment key={rows.indexOf(r)}>
                   <tr
-                    onClick={() => setExpanded(expanded === i ? null : i)}
-                    className={expanded === i ? "selected-row" : ""}
+                    onClick={() => setExpanded(expanded === r ? null : r)}
+                    className={expanded === r ? "selected-row" : ""}
                   >
                     {columns.map((c) => (
                       <td key={c.key} className={c.numeric ? "numeric" : ""}>
@@ -540,13 +543,10 @@ function DataTable({ rows, columns, defaultSort = "cost", emptyText }) {
                       </td>
                     ))}
                     <td>
-                      <ChevronRight
-                        size={14}
-                        className={expanded === i ? "rotate" : ""}
-                      />
+                      <button className="icon-button" aria-label={`${expanded === r ? "Hide" : "Show"} row details`} aria-expanded={expanded === r} onClick={(event) => { event.stopPropagation(); setExpanded(expanded === r ? null : r); }}><ChevronRight size={14} className={expanded === r ? "rotate" : ""} /></button>
                     </td>
                   </tr>
-                  {expanded === i && (
+                  {expanded === r && (
                     <tr className="detail-row">
                       <td colSpan={columns.length + 1}>
                         <div className="row-details">
@@ -570,10 +570,22 @@ function DataTable({ rows, columns, defaultSort = "cost", emptyText }) {
           </table>
         </div>
       )}
+      {filtered.length > pageSize && <div className="table-pagination">
+        <span>{number(currentPage * pageSize + 1)}–{number(Math.min((currentPage + 1) * pageSize, filtered.length))} of {number(filtered.length)}</span>
+        <button className="button small" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous</button>
+        <button className="button small" disabled={(currentPage + 1) * pageSize >= filtered.length} onClick={() => setPage(currentPage + 1)}>Next</button>
+      </div>}
     </>
   );
 }
 const TOKEN_COLS = [
+  {
+    key: "totalTokens",
+    label: "Total tokens",
+    numeric: true,
+    sortValue: tokenTotal,
+    render: (r) => <b>{number(tokenTotal(r))}</b>,
+  },
   {
     key: "input",
     label: "Input",
@@ -612,7 +624,7 @@ const TOKEN_COLS = [
   },
   {
     key: "cost",
-    label: "Cost",
+    label: "Est. cost",
     numeric: true,
     render: (r) => <b>{money(r.cost)}</b>,
   },
@@ -627,7 +639,7 @@ function Overview({ args, epoch, refresh, setPage }) {
     rows = d?.entries || [],
     g = graph.data;
   const total = modelTokenTotal(d);
-  const top = [...rows].sort((a, b) => b.cost - a.cost).slice(0, 5);
+  const top = [...rows].sort((a, b) => tokens(b) - tokens(a)).slice(0, 5);
   return (
     <ReportState state={models} onRetry={refresh}>
       <div className="metrics">
@@ -641,7 +653,7 @@ function Overview({ args, epoch, refresh, setPage }) {
         <Metric
           label="Total tokens"
           value={compact(total)}
-          detail={`${compact(d?.totalInput)} input · ${compact(d?.totalOutput)} output`}
+          detail="Includes cache reads, cache writes and reasoning"
           icon={Zap}
           color="var(--lime)"
         />
@@ -657,6 +669,13 @@ function Overview({ args, epoch, refresh, setPage }) {
           detail={`${compact(d?.totalCacheRead)} tokens read from cache`}
           icon={Boxes}
         />
+      </div>
+      <div className="token-breakdown" aria-label="Token breakdown">
+        {[
+          ["Input", d?.totalInput], ["Output", d?.totalOutput],
+          ["Cache read", d?.totalCacheRead], ["Cache write", d?.totalCacheWrite],
+          ["Reasoning", rows.reduce((sum, row) => sum + Number(row.reasoning || 0), 0)],
+        ].map(([label, value]) => <div key={label}><span>{label}</span><b title={number(value)}>{compact(value)}</b></div>)}
       </div>
       <div className="overview-grid">
         <Panel
@@ -677,7 +696,7 @@ function Overview({ args, epoch, refresh, setPage }) {
       </div>
       <Panel
         title="Most-used models"
-        description="Ranked by estimated cost"
+        description="Ranked by total tokens, including cache and reasoning"
         action={
           <button className="text-button" onClick={() => setPage("models")}>
             View all models <ArrowUpRight size={14} />
@@ -686,6 +705,7 @@ function Overview({ args, epoch, refresh, setPage }) {
       >
         <DataTable
           rows={top}
+          defaultSort="totalTokens"
           columns={[
             {
               key: "model",
@@ -703,9 +723,10 @@ function Overview({ args, epoch, refresh, setPage }) {
               ),
             },
             {
-              key: "input",
-              label: "Input",
-              render: (r) => compact(r.input),
+              key: "totalTokens",
+              label: "Total tokens",
+              sortValue: tokenTotal,
+              render: (r) => compact(tokens(r)),
               numeric: true,
             },
             {
@@ -877,9 +898,19 @@ function Quotas({ epoch, refresh, toCommand }) {
 }
 function Models({ args, epoch, refresh, projects = false }) {
   const [group, setGroup] = useState(
-      projects ? "workspace,model" : "client,provider,model",
+      projects ? "client,session,model" : "client,provider,model",
     ),
-    [merge, setMerge] = useState(false);
+    [merge, setMerge] = useState(false),
+    [sessionTitles, setSessionTitles] = useState({ titles: {} }),
+    [actionError, setActionError] = useState("");
+  const home = args.includes("--home") ? args[args.indexOf("--home") + 1] : "";
+  useEffect(() => {
+    if (!projects || !api.getSessionTitles) return;
+    let live = true;
+    setSessionTitles({ titles: {} });
+    api.getSessionTitles(home).then((result) => { if (live) setSessionTitles(result); }, (error) => { if (live) setSessionTitles({ titles: {}, warning: safeMessage(error.message) }); });
+    return () => { live = false; };
+  }, [projects, home, epoch]);
   const state = useReport(
     [
       "models",
@@ -892,7 +923,9 @@ function Models({ args, epoch, refresh, projects = false }) {
     ],
     epoch,
   );
-  const rows = state.data?.entries || [];
+  const rows = useMemo(() => (state.data?.entries || []).map((row) => ({ ...row,
+    ...(projects && group.includes("session") ? { sessionTitle: row.client === "codex" ? sessionTitles.titles?.[row.sessionId] || null : null } : {}),
+  })), [state.data, projects, group, sessionTitles]);
   const cols = [
     ...(group.includes("workspace")
       ? [
@@ -908,12 +941,11 @@ function Models({ args, epoch, refresh, projects = false }) {
     ...(group.includes("session")
       ? [
           {
-            key: "sessionId",
+            key: projects ? "sessionTitle" : "sessionId",
             label: "Session",
+            sortValue: (r) => r.sessionTitle || r.sessionId,
             render: (r) => (
-              <span className="mono" title={r.sessionId}>
-                {r.sessionId || "Unknown"}
-              </span>
+              <div className="session-cell" title={r.sessionId}><b>{r.sessionTitle || (projects ? r.client === "codex" ? "Untitled Codex chat" : `${pretty(r.client)} session` : r.sessionId || "Unknown session")}</b>{projects && <small>{r.sessionTitle ? "Saved chat title" : "Saved title unavailable"} · {r.sessionId?.slice(-12)}</small>}</div>
             ),
           },
         ]
@@ -924,17 +956,18 @@ function Models({ args, epoch, refresh, projects = false }) {
       label: "Client",
       render: (r) => pretty(r.mergedClients || r.client),
     },
-    { key: "provider", label: "Provider", render: (r) => pretty(r.provider) },
-    ...TOKEN_COLS,
-    {
+    ...(!projects ? [{ key: "provider", label: "Provider", render: (r) => pretty(r.provider) }] : []),
+    ...(projects ? TOKEN_COLS.filter((column) => ["totalTokens", "messageCount", "cost"].includes(column.key)) : TOKEN_COLS),
+    ...(!projects ? [{
       key: "performance",
       label: "ms / 1K",
       numeric: true,
+      sortValue: (r) => r.performance?.msPer1KTokens,
       render: (r) =>
         r.performance?.msPer1KTokens == null
           ? "—"
           : number(Math.round(r.performance.msPer1KTokens)),
-    },
+    }] : []),
   ];
   return (
     <>
@@ -969,17 +1002,18 @@ function Models({ args, epoch, refresh, projects = false }) {
           name={projects ? "tokscale-projects" : "tokscale-models"}
         />
       </div>
+      {actionError && <div className="inline-error" role="alert">{actionError}</div>}
       <ReportState state={state} onRetry={refresh}>
         <Panel
           title={projects ? "Explore your work" : "Complete model breakdown"}
-          description={`${number(rows.length)} rows · ${money(state.data?.totalCost)} estimated cost · click a row for every reported field`}
+          description={`${number(rows.length)} ${group.includes("session") ? "session / model" : group.includes("workspace") ? "workspace / model" : "model"} rows · ${money(state.data?.totalCost)} estimated cost · expand a row for the full token breakdown`}
         >
           <DataTable rows={rows} columns={cols} />
         </Panel>
         <div className="footnote">
-          Reasoning is a separate reported token bucket. Timing coverage and
-          source fields are available in each row.
+          {projects ? "Saved Codex chat names are shown when available. Workspace labels describe folders and can contain multiple sessions." : "Reasoning is a separate reported token bucket. Timing coverage and source fields are available in each row."}
         </div>
+        {projects && sessionTitles.warning && <div className="footnote">Saved chat titles: {sessionTitles.warning}</div>}
         {projects && (
           <div className="notice space-top">
             <TerminalSquare size={16} />
@@ -990,7 +1024,7 @@ function Models({ args, epoch, refresh, projects = false }) {
             </span>
             <button
               className="text-button"
-              onClick={() => api.launchNative([])}
+              onClick={() => { setActionError(""); api.launchNative([]).catch(error => setActionError(safeMessage(error.message))); }}
             >
               Open original TUI <ExternalLink size={12} />
             </button>
@@ -1099,6 +1133,7 @@ function Insights({ args, epoch, refresh }) {
     [selected, setSelected] = useState(null),
     [metric, setMetric] = useState("tokens");
   const days = state.data?.contributions || [];
+  const calendarCells = useMemo(() => calendarContributionCells(days), [state.data]);
   const max = Math.max(1, ...days.map((d) => Number(d.totals?.[metric] || 0)));
   const sum = state.data?.summary || {},
     tm = state.data?.timeMetrics;
@@ -1109,13 +1144,13 @@ function Insights({ args, epoch, refresh }) {
         <Metric
           label="Active days"
           value={number(sum.activeDays)}
-          detail={`${sum.totalDays || 0} days in the report`}
+          detail={`${sum.totalDays || 0} recorded dates in the report`}
           icon={Activity}
         />
         <Metric
           label="Daily average"
           value={compact(graphAverageTokens(state.data))}
-          detail="Tokens per calendar day"
+          detail="Tokens per day in the recorded date span"
           icon={TrendingUp}
         />
         <Metric
@@ -1137,7 +1172,7 @@ function Insights({ args, epoch, refresh }) {
       </div>
       <Panel
         title="Your contribution map"
-        description="Each square is one day. Select a day to explore its activity."
+        description="Each square is one calendar day. Blank dates have no recorded activity; select an active day to explore it."
         action={
           <select
             aria-label="Contribution metric"
@@ -1158,19 +1193,27 @@ function Insights({ args, epoch, refresh }) {
               <span>{dateLabel(days[0].date)}</span>
               <span>{dateLabel(days.at(-1).date)}</span>
             </div>
-            <div className="heatmap">
-              {days.map((d) => (
+            <div className="calendar-map">
+              <div className="heatmap-weekdays" aria-hidden="true">{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => <span key={day}>{day}</span>)}</div>
+              <div className="heatmap">
+              {calendarCells.map((cell, index) => {
+                if (!cell) return <span key={`padding-${index}`} className="heatmap-spacer" aria-hidden="true" />;
+                const d = cell.contribution || { date: cell.date, totals: {} };
+                return (
                 <button
                   aria-label={`${d.date}: ${number(d.totals?.[metric])} ${metric}`}
-                  title={`${d.date}: ${metric === "cost" ? money(d.totals.cost) : number(d.totals?.[metric])}`}
+                  title={cell.contribution ? `${d.date}: ${metric === "cost" ? money(d.totals.cost) : number(d.totals?.[metric])}` : `${d.date}: No recorded activity`}
                   key={d.date}
-                  className={selected === d.date ? "selected" : ""}
+                  disabled={!cell.contribution}
+                  className={`${selected === d.date ? "selected" : ""} ${!cell.contribution ? "heatmap-empty-day" : ""}`}
                   onClick={() => setSelected(d.date)}
                   style={{
                     background: `color-mix(in srgb, var(--violet) ${d.totals?.[metric] ? Math.max(20, (Number(d.totals[metric]) / max) * 100) : 0}%, var(--heat-empty))`,
                   }}
                 />
-              ))}
+                );
+              })}
+              </div>
             </div>
             <div className="heatmap-legend">
               <span>{number(sum.totalTokens)} total tokens</span>
@@ -1230,11 +1273,13 @@ function Insights({ args, epoch, refresh }) {
   );
 }
 
-function Integrations({ epoch, refresh, toCommand }) {
-  const state = useReport(["clients", "--json", "--no-spinner"], epoch),
-    [search, setSearch] = useState("");
-  const clients = (state.data?.clients || []).filter((r) =>
-    `${r.client} ${r.label}`.toLowerCase().includes(search.toLowerCase()),
+function Integrations({ epoch, refresh, toCommand, home }) {
+  const state = useReport(["clients", "--json", "--no-spinner", ...(home ? ["--home", home] : [])], epoch),
+    [search, setSearch] = useState(""),
+    [catalog, setCatalog] = useState("detected");
+  const allClients = state.data?.clients || [];
+  const clients = allClients.filter((r) =>
+    (catalog === "all" || r.messageCount > 0 || r.sessionsPathExists) && `${r.client} ${r.label}`.toLowerCase().includes(search.trim().toLowerCase()),
   );
   return (
     <>
@@ -1245,9 +1290,11 @@ function Integrations({ epoch, refresh, toCommand }) {
           <span>
             Local scan paths and original account tools. Sharing requires an
             explicit submit action.
+            {home && " Local scans use your selected report home; account connections use this Windows account."}
           </span>
         </div>
         <div className="view-toolbar">
+          <div className="segmented"><button className={catalog === "detected" ? "active" : ""} onClick={() => setCatalog("detected")}>Detected clients</button><button className={catalog === "all" ? "active" : ""} onClick={() => setCatalog("all")}>All supported ({allClients.length})</button></div>
           <label className="search">
             <Search size={15} />
             <input
@@ -1259,7 +1306,7 @@ function Integrations({ epoch, refresh, toCommand }) {
           </label>
           <button
             className="button small"
-            onClick={() => toCommand("clients --no-spinner")}
+              onClick={() => toCommand("--no-spinner clients")}
           >
             Full diagnostics <TerminalSquare size={14} />
           </button>
@@ -1343,8 +1390,9 @@ function Integrations({ epoch, refresh, toCommand }) {
         </div>
         {!clients.length && (
           <Empty
-            title="No matching integrations"
-            text="Search another client or inspect the original client diagnostics."
+            title={search ? "No matching integrations" : "No local clients detected"}
+            text="Account connections appear above. Browse all supported clients to inspect their session paths."
+            action={catalog === "detected" && <button className="button" onClick={() => { setCatalog("all"); setSearch(""); }}>Browse supported clients</button>}
           />
         )}
         {state.data?.note && <div className="footnote">{state.data.note}</div>}
@@ -1458,7 +1506,8 @@ function CommandCenter({ initialCommand, info, onCommandConsumed, visible }) {
     fit = useRef(null),
     session = useRef(null),
     early = useRef([]),
-    earlyExit = useRef(null),
+    earlyExit = useRef(new Map()),
+    commandRevision = useRef(0),
     running = useRef(false);
   useEffect(() => {
     if (initialCommand) {
@@ -1468,9 +1517,11 @@ function CommandCenter({ initialCommand, info, onCommandConsumed, visible }) {
   }, [initialCommand]);
   useEffect(() => {
     let live = true;
-    api.run(["--help", "--no-spinner"]).then((r) => {
-      if (live) setHelp(r.stdout || r.stderr);
-    });
+    api.run(["--no-spinner", "--help"]).then((r) => {
+      if (!live) return;
+      if (r.code !== 0) { setError(safeMessage(r.stderr || "Unable to load engine help. Try running --help again.")); return; }
+      setHelp(r.stdout || r.stderr);
+    }, (error) => { if (live) setError(safeMessage(error.message)); });
     return () => {
       live = false;
     };
@@ -1508,7 +1559,7 @@ function CommandCenter({ initialCommand, info, onCommandConsumed, visible }) {
     );
     t.writeln("Run a command above, or open the interactive TUI.\r\n");
     const input = t.onData((data) => {
-      if (session.current) api.writeTerminal(session.current, data);
+      if (session.current) api.writeTerminal(session.current, data).catch((error) => setError(safeMessage(error.message)));
     });
     const offData = api.onTerminalData(({ id, data }) => {
       if (session.current === id) t.write(data);
@@ -1522,7 +1573,7 @@ function CommandCenter({ initialCommand, info, onCommandConsumed, visible }) {
         setStatus(`Finished · exit ${code ?? 0}`);
         t.writeln(`\r\n\x1b[90mProcess finished (${code ?? 0}).\x1b[0m`);
       } else if (running.current) {
-        earlyExit.current = { id, code };
+        earlyExit.current.set(id, code);
       }
     });
     const ro = new ResizeObserver(() => {
@@ -1534,6 +1585,7 @@ function CommandCenter({ initialCommand, info, onCommandConsumed, visible }) {
     });
     ro.observe(terminalElement.current);
     return () => {
+      commandRevision.current++;
       ro.disconnect();
       input.dispose();
       offData();
@@ -1558,12 +1610,13 @@ function CommandCenter({ initialCommand, info, onCommandConsumed, visible }) {
   }, [visible]);
   const execute = async (args) => {
     if (running.current) return;
+    const revision = ++commandRevision.current;
     setError("");
     try {
       fit.current.fit();
       term.current.reset();
       early.current = [];
-      earlyExit.current = null;
+      earlyExit.current.clear();
       running.current = true;
       setBusy(true);
       setStatus(args.length ? "Running" : "Interactive TUI");
@@ -1572,13 +1625,17 @@ function CommandCenter({ initialCommand, info, onCommandConsumed, visible }) {
         cols: term.current.cols,
         rows: term.current.rows,
       });
+      if (revision !== commandRevision.current) {
+        await api.stopTerminal(id);
+        return;
+      }
       session.current = id;
       early.current
         .filter((e) => e.id === id)
         .forEach((e) => term.current.write(e.data));
       early.current = [];
-      if (earlyExit.current?.id === id) {
-        const code = earlyExit.current.code;
+      if (earlyExit.current.has(id)) {
+        const code = earlyExit.current.get(id);
         session.current = null;
         running.current = false;
         setBusy(false);
@@ -1586,14 +1643,15 @@ function CommandCenter({ initialCommand, info, onCommandConsumed, visible }) {
         term.current.writeln(
           `\r\n\x1b[90mProcess finished (${code ?? 0}).\x1b[0m`,
         );
-        earlyExit.current = null;
+        earlyExit.current.delete(id);
       }
       term.current.focus();
     } catch (e) {
+      if (revision !== commandRevision.current) return;
       running.current = false;
       setBusy(false);
       setStatus("Unable to start");
-      setError(e.message);
+      setError(safeMessage(e.message));
     }
   };
   const run = () => {
@@ -1607,11 +1665,16 @@ function CommandCenter({ initialCommand, info, onCommandConsumed, visible }) {
     }
   };
   const stop = async () => {
-    if (session.current) await api.stopTerminal(session.current);
+    commandRevision.current++;
+    const id = session.current;
     session.current = null;
     running.current = false;
     setBusy(false);
     setStatus("Stopped");
+    if (id) {
+      try { await api.stopTerminal(id); }
+      catch (error) { setError(safeMessage(error.message)); }
+    }
   };
   const discovered = Array.from(
     help.matchAll(/^\s{2}([a-z][\w-]+)\s{2,}(.+)$/gm),
@@ -1732,7 +1795,7 @@ function CommandCenter({ initialCommand, info, onCommandConsumed, visible }) {
             <div className="discovered-commands">
               {discovered
                 .filter((c) =>
-                  `${c.name} ${c.description}`.includes(catalogSearch),
+                  `${c.name} ${c.description}`.toLowerCase().includes(catalogSearch.toLowerCase()),
                 )
                 .map((c) => (
                   <button
@@ -1757,16 +1820,37 @@ function CommandCenter({ initialCommand, info, onCommandConsumed, visible }) {
 
 function SettingsView({ settings, setSettings, info, toCommand }) {
   const [saved, setSaved] = useState(false),
+    [saving, setSaving] = useState(false),
     [error, setError] = useState("");
+  const saveQueue = useRef(Promise.resolve()), saveSequence = useRef(0), toastTimer = useRef(null);
+  useEffect(() => () => clearTimeout(toastTimer.current), []);
   const save = async (patch) => {
+    const sequence = ++saveSequence.current;
+    setError("");
+    setSaved(false);
+    setSaving(true);
+    setSettings((current) => ({ ...current, ...patch }));
+    // Send patches in order: quick changes to theme and refresh settings must
+    // not overwrite one another with an older settings object.
+    const task = saveQueue.current.catch(() => {}).then(() => api.saveSettings(patch));
+    saveQueue.current = task;
     try {
-      const next = { ...settings, ...patch };
-      await api.saveSettings(next);
-      setSettings(next);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      const persisted = await task;
+      if (sequence === saveSequence.current) {
+        setSettings((current) => ({ ...current, ...persisted }));
+        setError("");
+        setSaved(true);
+        clearTimeout(toastTimer.current);
+        toastTimer.current = setTimeout(() => setSaved(false), 2000);
+      }
     } catch (e) {
-      setError(e.message);
+      if (sequence === saveSequence.current) {
+        setError(e.message);
+        const persisted = await api.getSettings().catch(() => null);
+        if (persisted && sequence === saveSequence.current) setSettings((current) => ({ ...current, ...persisted }));
+      }
+    } finally {
+      if (sequence === saveSequence.current) setSaving(false);
     }
   };
   return (
@@ -1846,8 +1930,10 @@ function SettingsView({ settings, setSettings, info, toCommand }) {
             <button
               className="button small"
               onClick={async () => {
-                const home = await api.selectHome();
-                if (home) save({ home });
+                try {
+                  const home = await api.selectHome();
+                  if (home) await save({ home });
+                } catch (error) { setError(safeMessage(error.message)); }
               }}
             >
               <FolderOpen size={14} /> Choose folder
@@ -1895,7 +1981,7 @@ function SettingsView({ settings, setSettings, info, toCommand }) {
           <div className="quick-actions">
             <button
               className="button small"
-              onClick={() => api.showDataFolder()}
+              onClick={() => { setError(""); api.showDataFolder().catch(error => setError(safeMessage(error.message))); }}
             >
               <FolderOpen size={14} /> Data folder
             </button>
@@ -1918,6 +2004,7 @@ function SettingsView({ settings, setSettings, info, toCommand }) {
           <Download size={18} className="muted" />
         </div>
       </Panel>
+      {saving && <div className="toast" role="status"><LoaderCircle className="spin" size={16} /> Saving preferences…</div>}
       {saved && (
         <div className="toast">
           <Check size={16} /> Preferences saved
@@ -1955,6 +2042,8 @@ function App() {
     [until, setUntil] = useState(""),
     [year, setYear] = useState(""),
     [filterOpen, setFilterOpen] = useState(false),
+    [draftFilter, setDraftFilter] = useState({ period: "custom", since: "", until: "", year: "" }),
+    [filterError, setFilterError] = useState(""),
     [command, setCommand] = useState(""),
     [ready, setReady] = useState(false),
     [lastRefresh, setLastRefresh] = useState(new Date()),
@@ -1971,6 +2060,13 @@ function App() {
     const listen = () => setVisible(!document.hidden);
     document.addEventListener("visibilitychange", listen);
     return () => document.removeEventListener("visibilitychange", listen);
+  }, []);
+  useEffect(() => {
+    const openCommands = (event) => {
+      if (event.ctrlKey && event.key.toLowerCase() === "k") { event.preventDefault(); setPage("commands"); }
+    };
+    document.addEventListener("keydown", openCommands);
+    return () => document.removeEventListener("keydown", openCommands);
   }, []);
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: light)");
@@ -2002,8 +2098,8 @@ function App() {
     return () => clearInterval(t);
   }, [ready, visible, settings.refreshInterval, page, refresh]);
   const clientState = useReport(
-    ["clients", "--json", "--no-spinner"],
-    0,
+    ["clients", "--json", "--no-spinner", ...(settings.home ? ["--home", settings.home] : [])],
+    epoch,
     ready,
   );
   const filterArgs = useMemo(() => {
@@ -2085,7 +2181,7 @@ function App() {
             >
               <Icon size={18} />
               <span>{label}</span>
-              {id === "commands" && <span className="nav-key">⌘</span>}
+              {id === "commands" && <span className="nav-key">Ctrl K</span>}
             </button>
           ))}
         </nav>
@@ -2120,7 +2216,7 @@ function App() {
             {page !== "commands" && page !== "settings" && (
               <>
                 <span className="refresh-time">
-                  Updated{" "}
+                  Refresh requested{" "}
                   {lastRefresh.toLocaleTimeString([], {
                     hour: "2-digit",
                     minute: "2-digit",
@@ -2145,8 +2241,8 @@ function App() {
               {[
                 ["today", "Today"],
                 ["yesterday", "Yesterday"],
-                ["week", "Week"],
-                ["month", "Month"],
+                ["week", "Last 7 days"],
+                ["month", "This month"],
                 ["all", "All time"],
               ].map(([id, label]) => (
                 <button
@@ -2162,7 +2258,12 @@ function App() {
               ))}
               <button
                 className={["custom", "year"].includes(period) ? "active" : ""}
-                onClick={() => setFilterOpen(!filterOpen)}
+                aria-expanded={filterOpen}
+                onClick={() => {
+                  if (!filterOpen) setDraftFilter({ period: period === "year" ? "year" : "custom", since, until, year });
+                  setFilterError("");
+                  setFilterOpen(!filterOpen);
+                }}
               >
                 Custom <ChevronDown size={12} />
               </button>
@@ -2186,15 +2287,18 @@ function App() {
         )}
         {filtered && filterOpen && (
           <div className="custom-filters">
+            <select aria-label="Custom date filter type" value={draftFilter.period} onChange={(event) => { const value = event.target.value; setDraftFilter((current) => ({ ...current, period: value })); setFilterError(""); }}><option value="custom">Date range</option><option value="year">Calendar year</option></select>
+            {draftFilter.period === "custom" ? <>
             <label>
               From{" "}
               <input
                 aria-label="Start date"
                 type="date"
-                value={since}
+                value={draftFilter.since}
                 onChange={(e) => {
-                  setSince(e.target.value);
-                  setPeriod("custom");
+                  const value = e.target.value;
+                  setDraftFilter((current) => ({ ...current, since: value }));
+                  setFilterError("");
                 }}
               />
             </label>
@@ -2203,14 +2307,15 @@ function App() {
               <input
                 aria-label="End date"
                 type="date"
-                value={until}
+                value={draftFilter.until}
                 onChange={(e) => {
-                  setUntil(e.target.value);
-                  setPeriod("custom");
+                  const value = e.target.value;
+                  setDraftFilter((current) => ({ ...current, until: value }));
+                  setFilterError("");
                 }}
               />
             </label>
-            <span>or</span>
+            </> :
             <label>
               Year{" "}
               <input
@@ -2219,21 +2324,35 @@ function App() {
                 min="2000"
                 max="2100"
                 placeholder="YYYY"
-                value={year}
+                value={draftFilter.year}
                 onChange={(e) => {
-                  setYear(e.target.value);
-                  setPeriod("year");
+                  const value = e.target.value;
+                  setDraftFilter((current) => ({ ...current, year: value }));
+                  setFilterError("");
                 }}
               />
-            </label>
+            </label>}
             <button
               className="button small"
-              onClick={() => setFilterOpen(false)}
+              onClick={() => {
+                const error = validateDateFilter(draftFilter);
+                if (error) { setFilterError(error); return; }
+                setPeriod(draftFilter.period);
+                setSince(draftFilter.since);
+                setUntil(draftFilter.until);
+                setYear(draftFilter.year);
+                setFilterError("");
+                setFilterOpen(false);
+              }}
             >
-              Done
+              Apply range
             </button>
+            <button className="text-button" onClick={() => { setFilterOpen(false); setFilterError(""); }}>Cancel</button>
+            {filterError && <div className="filter-error" role="alert">{filterError}</div>}
           </div>
         )}
+        {filtered && <div className="filter-summary"><span>{reportRangeLabel({ period, since, until, year })} · {client === "all" ? "All clients" : clientState.data?.clients?.find((entry) => entry.client === client)?.label || pretty(client)}</span>{(client !== "all" || period !== settings.defaultPeriod) && <button className="text-button" onClick={() => { setClient("all"); setPeriod(settings.defaultPeriod); setFilterOpen(false); }}>Reset filters</button>}</div>}
+        {filtered && clientState.error && <div className="filter-error" role="alert">Client list could not refresh: {clientState.error} <button className="text-button" onClick={refresh}>Retry</button></div>}
         <div className="content">
           {info.settingsWarning && (
             <div className="inline-error">{info.settingsWarning}</div>
@@ -2285,6 +2404,7 @@ function App() {
               )}{" "}
               {page === "integrations" && (
                 <Integrations
+                  home={settings.home}
                   epoch={epoch}
                   refresh={refresh}
                   toCommand={toCommand}
