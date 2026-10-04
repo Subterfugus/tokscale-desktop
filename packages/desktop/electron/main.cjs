@@ -1,0 +1,536 @@
+const {
+  app,
+  BrowserWindow,
+  ipcMain,
+  dialog,
+  shell,
+  Menu,
+  Tray,
+  nativeImage,
+} = require("electron");
+const fs = require("node:fs/promises");
+const path = require("node:path");
+const os = require("node:os");
+const { pathToFileURL } = require("node:url");
+const { spawn } = require("node:child_process");
+const { randomUUID } = require("node:crypto");
+const security = require("./security.cjs");
+const { runCommand } = require("./runner.cjs");
+const pkg = require("../package.json");
+const enginePath = app.isPackaged
+  ? path.join(process.resourcesPath, "engine", "tokscale.exe")
+  : path.join(
+      __dirname,
+      "../node_modules/@tokscale/cli-win32-x64-msvc/bin/tokscale.exe",
+    );
+const indexPath = path.join(__dirname, "../dist-renderer/index.html");
+const indexUrl = pathToFileURL(indexPath).href;
+const iconPath = app.isPackaged
+  ? path.join(process.resourcesPath, "icon.png")
+  : path.join(__dirname, "../assets/icon.png");
+const terminals = new Map(),
+  runs = new Set();
+let window,
+  tray,
+  quitting = false,
+  settingsWarning = "";
+let preferences = {
+  theme: "dark",
+  refreshInterval: 120000,
+  home: "",
+  defaultPeriod: "month",
+  includeGeminiThoughts: true,
+};
+let pty;
+try {
+  // ConPTY starts a worker by filename, so it must resolve outside app.asar.
+  const ptyModule = app.isPackaged
+    ? path.join(
+        process.resourcesPath,
+        "app.asar.unpacked/node_modules/node-pty",
+      )
+    : "node-pty";
+  pty = require(ptyModule);
+} catch {
+  /* Native terminal remains available if PTY cannot load. */
+}
+const settingsPath = () =>
+  path.join(app.getPath("userData"), "desktop-settings.json");
+const smoke = process.argv.includes("--desktop-smoke");
+const switchValue = (name) =>
+  process.argv
+    .find((arg) => arg.startsWith(name + "="))
+    ?.slice(name.length + 1);
+function engineEnv() {
+  const isolated = smoke && switchValue("--smoke-home");
+  const env = isolated
+    ? Object.fromEntries(
+        Object.entries(process.env).filter(([key]) =>
+          /^(PATH|SYSTEMROOT|WINDIR|COMSPEC|PATHEXT|TEMP|TMP|SYSTEMDRIVE|PROCESSOR_ARCHITECTURE|NUMBER_OF_PROCESSORS)$/i.test(
+            key,
+          ),
+        ),
+      )
+    : { ...process.env };
+  if (smoke && switchValue("--smoke-home")) {
+    const fixture = switchValue("--smoke-home");
+    env.HOME = fixture;
+    env.USERPROFILE = fixture;
+    env.APPDATA = path.join(fixture, "AppData/Roaming");
+    env.LOCALAPPDATA = path.join(fixture, "AppData/Local");
+    env.TOKSCALE_CONFIG_DIR = path.join(fixture, ".config/tokscale");
+    env.TOKSCALE_CACHE_DIR = path.join(fixture, ".cache/tokscale");
+  }
+  return env;
+}
+function commandArgs(input, noninteractive = true) {
+  const argv = security.args(input);
+  const result = noninteractive
+    ? ["--no-spinner", ...argv.filter((arg) => arg !== "--no-spinner")]
+    : argv;
+  return result;
+}
+function run(input) {
+  return runCommand(enginePath, commandArgs(input), {
+    env: engineEnv(),
+    register: (child) => runs.add(child),
+    unregister: (child) => runs.delete(child),
+  });
+}
+function send(channel, payload) {
+  if (window && !window.isDestroyed())
+    window.webContents.send("tokscale:" + channel, payload);
+}
+function stopAll() {
+  for (const child of runs) child.kill();
+  for (const terminal of terminals.values()) terminal.kill();
+  terminals.clear();
+}
+function handle(name, callback) {
+  ipcMain.handle("tokscale:" + name, (event, ...input) => {
+    if (
+      !window ||
+      event.sender !== window.webContents ||
+      event.senderFrame !== window.webContents.mainFrame ||
+      event.senderFrame.url !== indexUrl
+    )
+      throw new Error("Untrusted caller");
+    return callback(...input);
+  });
+}
+function terminal(id) {
+  if (typeof id !== "string" || !terminals.has(id))
+    throw new Error("Unknown terminal");
+  return terminals.get(id);
+}
+function wireApi() {
+  handle("getInfo", () => ({
+    version: pkg.version,
+    engineVersion: "4.17.0",
+    enginePath,
+    platform: process.platform,
+    homePath: preferences.home || os.homedir(),
+    settingsPath: settingsPath(),
+    terminalAvailable: Boolean(pty),
+    settingsWarning,
+  }));
+  handle("run", run);
+  handle("cancelRuns", () => {
+    for (const child of runs) child.kill();
+  });
+  handle("getGraph", async (input) => {
+    const args = security.args(input);
+    if (args.some((arg) => arg === "--output" || arg.startsWith("--output=")))
+      throw new Error("Graph output is managed by the desktop app");
+    const dir = await fs.mkdtemp(
+      path.join(app.getPath("temp"), "tokscale-desktop-graph-"),
+    );
+    try {
+      const output = path.join(dir, "graph.json");
+      const result = await run(["graph", ...args, "--output", output]);
+      if (result.code !== 0)
+        throw new Error(
+          result.stderr || result.stdout || "Graph export failed",
+        );
+      const stat = await fs.stat(output);
+      if (stat.size > 64 * 1024 * 1024)
+        throw new Error("Graph data exceeds 64 MB");
+      return JSON.parse(await fs.readFile(output, "utf8"));
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+  handle("startTerminal", (options) => {
+    if (!pty)
+      throw new Error(
+        "Embedded terminal is unavailable. Open the native terminal to use all Tokscale commands.",
+      );
+    if (!options || typeof options !== "object")
+      throw new Error("Invalid terminal options");
+    const size = security.dimensions(options.cols, options.rows);
+    const args = commandArgs(options.args, false);
+    if (terminals.size >= 8)
+      throw new Error("Close an existing terminal first");
+    const id = randomUUID();
+    const proc = pty.spawn(enginePath, args, {
+      name: "xterm-256color",
+      cols: size.cols,
+      rows: size.rows,
+      cwd:
+        smoke && switchValue("--smoke-home")
+          ? switchValue("--smoke-home")
+          : os.homedir(),
+      env: { ...engineEnv(), TERM: "xterm-256color", COLORTERM: "truecolor" },
+      useConpty: true,
+      useConptyDll: true,
+      conptyInheritCursor: false,
+    });
+    terminals.set(id, proc);
+    proc.onData((data) => send("terminalData", { id, data }));
+    proc.onExit((event) => {
+      terminals.delete(id);
+      send("terminalExit", { id, code: event.exitCode });
+    });
+    return id;
+  });
+  handle("writeTerminal", (id, data) => {
+    if (typeof data !== "string" || data.length > 1048576)
+      throw new Error("Invalid terminal input");
+    terminal(id).write(data);
+  });
+  handle("resizeTerminal", (id, cols, rows) => {
+    const size = security.dimensions(cols, rows);
+    if (typeof id !== "string") throw new Error("Invalid terminal");
+    // A window resize can race the final output flush of a quick command.
+    const proc = terminals.get(id);
+    if (!proc) return;
+    try {
+      proc.resize(size.cols, size.rows);
+    } catch (error) {
+      if (!/already exited/i.test(error.message)) throw error;
+    }
+  });
+  handle("stopTerminal", (id) => {
+    if (typeof id !== "string") throw new Error("Invalid terminal");
+    if (terminals.has(id)) terminal(id).kill();
+  });
+  handle("launchNative", async (input) => {
+    const args = commandArgs(input, false);
+    const literal = (value) => "'" + value.replace(/'/g, "''") + "'";
+    const command =
+      "Start-Process -FilePath " +
+      literal(enginePath) +
+      (args.length
+        ? " -ArgumentList " +
+          literal(args.map(security.quoteWindowsArg).join(" "))
+        : "");
+    const encoded = Buffer.from(command, "utf16le").toString("base64");
+    await new Promise((resolve, reject) => {
+      const child = spawn(
+        path.join(
+          process.env.SystemRoot || "C:\\Windows",
+          "System32/WindowsPowerShell/v1.0/powershell.exe",
+        ),
+        ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+        { shell: false, windowsHide: true, env: engineEnv(), stdio: "ignore" },
+      );
+      child.once("error", reject);
+      child.once("exit", (code) =>
+        code === 0
+          ? resolve()
+          : reject(new Error("Could not open native terminal")),
+      );
+    });
+  });
+  handle("selectHome", async () => {
+    const result = await dialog.showOpenDialog(window, {
+      title: "Choose a home folder containing AI client data",
+      properties: ["openDirectory"],
+      defaultPath: preferences.home || os.homedir(),
+    });
+    return result.canceled ? null : result.filePaths[0];
+  });
+  handle("exportFile", async (input) => {
+    const value = security.exportRequest(input);
+    const result = await dialog.showSaveDialog(window, {
+      title: "Export Tokscale data",
+      defaultPath: path.join(app.getPath("documents"), value.name),
+    });
+    if (result.canceled || !result.filePath) return null;
+    await fs.writeFile(result.filePath, value.content, "utf8");
+    return result.filePath;
+  });
+  handle("openExternal", (url) =>
+    shell.openExternal(security.externalUrl(url)),
+  );
+  handle("showDataFolder", async () => {
+    const dir =
+      process.env.TOKSCALE_CONFIG_DIR ||
+      path.join(app.getPath("appData"), "tokscale");
+    await fs.mkdir(dir, { recursive: true });
+    const error = await shell.openPath(dir);
+    if (error) throw new Error(error);
+  });
+  handle("getSettings", () => preferences);
+  handle("saveSettings", async (value) => {
+    const next = security.settings(value);
+    const home = next.home;
+    if (home && !(await fs.stat(home)).isDirectory())
+      throw new Error("Home must be a folder");
+    const merged = { ...preferences, ...next };
+    await fs.mkdir(app.getPath("userData"), { recursive: true });
+    const temp = settingsPath() + "." + randomUUID() + ".tmp";
+    await fs.writeFile(temp, JSON.stringify(merged, null, 2), "utf8");
+    await fs.rename(temp, settingsPath());
+    preferences = merged;
+  });
+  handle("windowControl", (action) => {
+    if (!["minimize", "maximize", "close"].includes(action))
+      throw new Error("Invalid window action");
+    if (action === "minimize") window.minimize();
+    if (action === "maximize")
+      window.isMaximized() ? window.unmaximize() : window.maximize();
+    if (action === "close") window.close();
+  });
+}
+async function createWindow() {
+  window = new BrowserWindow({
+    width: 1440,
+    height: 960,
+    minWidth: 1050,
+    minHeight: 720,
+    show: false,
+    backgroundColor: "#080b10",
+    title: "Tokscale Desktop",
+    icon: iconPath,
+    frame: false,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.cjs"),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+      webSecurity: true,
+      spellcheck: false,
+      backgroundThrottling: !smoke,
+    },
+  });
+  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  window.webContents.on("will-navigate", (event, url) => {
+    if (url !== indexUrl) event.preventDefault();
+  });
+  window.webContents.session.setPermissionRequestHandler(
+    (_wc, _permission, callback) => callback(false),
+  );
+  window.webContents.session.setPermissionCheckHandler(() => false);
+  window.webContents.on("render-process-gone", () => stopAll());
+  window.once("ready-to-show", () => {
+    if (!smoke) window.show();
+  });
+  window.on("close", (event) => {
+    if (preferences.minimizeToTray && tray && !quitting && !smoke) {
+      event.preventDefault();
+      window.hide();
+    }
+  });
+  window.on("closed", stopAll);
+  await window.loadFile(indexPath);
+}
+async function smokeTest() {
+  const output = switchValue("--smoke-output");
+  if (!output || !switchValue("--smoke-home"))
+    throw new Error(
+      "Smoke test requires a synthetic home and output directory",
+    );
+  await fs.mkdir(output, { recursive: true });
+  const bridge = await window.webContents.executeJavaScript(`(async () => {
+    const info = await window.tokscale.getInfo();
+    const version = await window.tokscale.run(['--version']);
+    const invalid = await window.tokscale.run(['--this-option-does-not-exist']);
+    let blockedUrl = false; try { await window.tokscale.openExternal('file:///C:/Windows'); } catch { blockedUrl = true; }
+    return { info, version, invalidCode: invalid.code, blockedUrl, requireType: typeof require, processType: typeof process };
+  })()`);
+  if (
+    bridge.version.code !== 0 ||
+    !bridge.version.stdout.includes("4.17.0") ||
+    bridge.invalidCode === 0 ||
+    !bridge.blockedUrl ||
+    bridge.requireType !== "undefined" ||
+    bridge.processType !== "undefined"
+  )
+    throw new Error("Desktop bridge smoke test failed");
+  const terminalResult = await window.webContents
+    .executeJavaScript(`(async () => {
+    let text = ''; let id; let timedOut = false;
+    return await new Promise(async (resolve, reject) => {
+      const dataOff = window.tokscale.onTerminalData(event => { if (!id || event.id === id) text += event.data; });
+      const exitOff = window.tokscale.onTerminalExit(event => { if (!id || event.id === id) finish(event.code); });
+      const timer = setTimeout(() => { timedOut = true; finish(-1); }, 15000);
+      function finish(code) { clearTimeout(timer); dataOff(); exitOff(); resolve({code, text, timedOut}); }
+      try { id = await window.tokscale.startTerminal({args:['--no-spinner','--version'], cols:100, rows:30}); } catch(error) { clearTimeout(timer); dataOff(); exitOff(); reject(error); }
+    });
+  })()`);
+  if (terminalResult.code !== 0 || !terminalResult.text.includes("4.17.0"))
+    throw new Error(
+      "Embedded terminal smoke test failed: " + JSON.stringify(terminalResult),
+    );
+  const tuiResult = await window.webContents.executeJavaScript(`(async () => {
+    return await new Promise(async (resolve, reject) => {
+      let id; let text = ''; let interacting = false; let resized = false; let finished = false;
+      const timer = setTimeout(() => finish(-1, 'Interactive TUI timed out'), 45000);
+      const dataOff = window.tokscale.onTerminalData(event => {
+        if (id && event.id !== id) return;
+        text += event.data;
+        if (event.data.includes('\\x1b[6n') && id) void window.tokscale.writeTerminal(id, '\\x1b[1;1R');
+        if (text.length > 1500 && id && !interacting) {
+          interacting = true;
+          void (async () => {
+            await window.tokscale.resizeTerminal(id, 112, 32); resized = true;
+            await window.tokscale.writeTerminal(id, '\\t\\x1b[B');
+            await new Promise(resolve => setTimeout(resolve, 1200));
+            await window.tokscale.writeTerminal(id, 'q');
+          })().catch(error => finish(-1, error.message));
+        }
+      });
+      const exitOff = window.tokscale.onTerminalExit(event => { if (!id || event.id === id) finish(event.code); });
+      function finish(code, error) {
+        if (finished) return; finished = true; clearTimeout(timer); dataOff(); exitOff();
+        if (error && id) void window.tokscale.stopTerminal(id);
+        resolve({code, renderedBytes:text.length, resized, interacted:interacting, error});
+      }
+      try { id = await window.tokscale.startTerminal({args:['--no-spinner'],cols:100,rows:30}); }
+      catch(error) { finish(-1,error.message); }
+    });
+  })()`);
+  if (tuiResult.code !== 0 || !tuiResult.resized || !tuiResult.interacted)
+    throw new Error(
+      "Interactive TUI smoke failed: " + JSON.stringify(tuiResult),
+    );
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const loading = await window.webContents.executeJavaScript(
+      `document.body.innerText.includes('Loading') || document.body.innerText.includes('Scanning')`,
+    );
+    if (!loading && attempt >= 5) break;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  let uiChecks;
+  const uiCheckPath = path.join(__dirname, "ui-checks.cjs");
+  try {
+    await fs.access(uiCheckPath);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  if (require("node:fs").existsSync(uiCheckPath))
+    uiChecks = await require(uiCheckPath).runUiChecks({
+      window,
+      output,
+      fixtureHome: switchValue("--smoke-home"),
+    });
+  await fs.writeFile(
+    path.join(output, "desktop.png"),
+    (await window.webContents.capturePage()).toPNG(),
+  );
+  const documentState = await window.webContents.executeJavaScript(
+    `({title:document.title, body:document.body.innerText, width:innerWidth,height:innerHeight})`,
+  );
+  await fs.writeFile(
+    path.join(output, "smoke.json"),
+    JSON.stringify(
+      {
+        smokeId: switchValue("--smoke-id"),
+        ...bridge,
+        terminal: terminalResult,
+        tui: tuiResult,
+        uiChecks,
+        document: documentState,
+      },
+      null,
+      2,
+    ),
+  );
+}
+app.setName("Tokscale Desktop");
+if (smoke) {
+  const output = switchValue("--smoke-output");
+  if (output) app.setPath("userData", path.join(output, "app-data"));
+}
+if (!app.requestSingleInstanceLock()) app.quit();
+else {
+  app.on("second-instance", () => {
+    window?.show();
+    window?.focus();
+  });
+  app
+    .whenReady()
+    .then(async () => {
+      try {
+        preferences = {
+          ...preferences,
+          ...security.settings(
+            JSON.parse(await fs.readFile(settingsPath(), "utf8")),
+          ),
+        };
+      } catch (error) {
+        if (error.code !== "ENOENT")
+          settingsWarning =
+            "Desktop settings could not be read. Defaults are in use; your saved file has been preserved.";
+      }
+      if (smoke) preferences.home = switchValue("--smoke-home") || "";
+      Menu.setApplicationMenu(null);
+      wireApi();
+      await createWindow();
+      if (smoke) {
+        await smokeTest();
+        quitting = true;
+        app.quit();
+        return;
+      }
+      const image = nativeImage.createFromPath(iconPath);
+      if (!image.isEmpty()) {
+        tray = new Tray(image.resize({ width: 16, height: 16 }));
+        tray.setToolTip("Tokscale Desktop");
+        tray.setContextMenu(
+          Menu.buildFromTemplate([
+            {
+              label: "Open Tokscale Desktop",
+              click: () => {
+                window.show();
+                window.focus();
+              },
+            },
+            { type: "separator" },
+            {
+              label: "Quit",
+              click: () => {
+                quitting = true;
+                app.quit();
+              },
+            },
+          ]),
+        );
+        tray.on("double-click", () => {
+          window.show();
+          window.focus();
+        });
+      }
+    })
+    .catch(async (error) => {
+      if (smoke) {
+        const output = switchValue("--smoke-output");
+        if (output)
+          await fs.writeFile(
+            path.join(output, "smoke-error.txt"),
+            error.stack || error.message,
+          );
+        console.error(error.message);
+        app.exit(1);
+      } else {
+        dialog.showErrorBox("Tokscale Desktop could not start", error.message);
+        app.quit();
+      }
+    });
+  app.on("before-quit", () => {
+    quitting = true;
+    stopAll();
+  });
+  app.on("window-all-closed", () => app.quit());
+}

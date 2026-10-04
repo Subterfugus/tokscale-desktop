@@ -1,0 +1,5 @@
+dist-renderer/
+release/
+node_modules/
+*.log
+smoke-results.json

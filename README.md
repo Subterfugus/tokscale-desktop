@@ -1,3 +1,5 @@
+> **Windows desktop fork:** this repository adds Tokscale Desktop in `packages/desktop`. See [DESKTOP.md](DESKTOP.md) for the desktop application, build instructions, and how it preserves the original Tokscale tools. The upstream documentation follows below.
+
 <!-- <CENTERED SECTION FOR GITHUB DISPLAY> -->
 
 <div align="center">

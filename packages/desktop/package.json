@@ -1,0 +1,86 @@
+{
+  "name": "tokscale-desktop",
+  "productName": "Tokscale Desktop",
+  "version": "0.1.0",
+  "description": "A Windows desktop workspace for the full Tokscale engine",
+  "author": "Tokscale Desktop contributors",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "electron .",
+    "dev": "npm run build && electron .",
+    "test": "node --test electron/*.test.cjs tests/*.test.mjs",
+    "package": "npm run build && electron-builder --win portable --x64",
+    "package:installer": "npm run build && electron-builder --win nsis --x64",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "@tokscale/cli-win32-x64-msvc": "4.17.0",
+    "node-pty": "1.1.0"
+  },
+  "devDependencies": {
+    "electron": "44.5.1",
+    "electron-builder": "26.15.3",
+    "esbuild": "0.25.12",
+    "@xterm/addon-fit": "0.10.0",
+    "@xterm/xterm": "5.5.0",
+    "lucide-react": "0.468.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  },
+  "build": {
+    "appId": "io.tokscale.desktop",
+    "productName": "Tokscale Desktop",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**/*.cjs",
+      "dist-renderer/**/*",
+      "package.json",
+      "!electron/*.test.cjs",
+      "!node_modules/@tokscale/cli-win32-x64-msvc/bin/**/*",
+      "!node_modules/node-pty/**/*.pdb",
+      "!node_modules/node-pty/prebuilds/darwin-*/**/*",
+      "!node_modules/node-pty/prebuilds/win32-arm64/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "node_modules/@tokscale/cli-win32-x64-msvc/bin/tokscale.exe",
+        "to": "engine/tokscale.exe"
+      },
+      {
+        "from": "assets/icon.png",
+        "to": "icon.png"
+      },
+      {
+        "from": "../../LICENSE",
+        "to": "Tokscale-LICENSE.txt"
+      }
+    ],
+    "asarUnpack": [
+      "node_modules/node-pty/**/*"
+    ],
+    "npmRebuild": false,
+    "win": {
+      "target": [
+        "portable"
+      ],
+      "icon": "assets/icon.png",
+      "signExecutable": false,
+      "artifactName": "Tokscale-Desktop-${version}-${arch}.${ext}"
+    },
+    "portable": {
+      "requestExecutionLevel": "user"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "Tokscale-Desktop-Setup-${version}-${arch}.${ext}"
+    }
+  }
+}
