@@ -2,6 +2,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+// Every id in the engine's usage provider registry (commands/usage/mod.rs).
+export const USAGE_PROVIDERS = [
+  "claude", "codex", "zai", "amp", "antigravity", "copilot", "grok", "kimi",
+  "minimax", "minimax-token-plan", "warp", "sakana", "opencode-go",
+];
+
 // Fixed, invented activity: 40 sessions, 160 messages, 5,446,000 tokens.
 // No credentials, real conversation text, or provider account data.
 export async function createFixture(home) {
@@ -12,7 +18,12 @@ export async function createFixture(home) {
     await mkdir(dir, { recursive: true });
   await writeFile(
     path.join(configRoot, "settings.json"),
-    JSON.stringify({ scanner: { bucketTimezone: "America/New_York" } }),
+    JSON.stringify({
+      scanner: { bucketTimezone: "America/New_York" },
+      // Some providers read sign-ins from the Windows credential store, which
+      // a fixture home cannot redirect. Disabling them keeps checks offline.
+      usage: { disabledProviders: USAGE_PROVIDERS },
+    }),
   );
   const iso = (time) => new Date(time).toISOString();
   const jsonl = (rows) =>
@@ -83,7 +94,11 @@ export async function createFixture(home) {
       await writeFile(path.join(codexRoot, `rollout-${id}.jsonl`), jsonl(rows));
       const claudeId = `synthetic-claude-${stamp}-${session}`;
       time = date + (17 + session) * 3600000;
-      const claudeRows = [];
+      const claudeRows = [
+        // Saved title metadata as written by Claude Code; no message text.
+        { type: "ai-title", sessionId: claudeId, aiTitle: `Cedar generated · ${stamp}` },
+        { type: "custom-title", customTitle: `Cedar review · ${stamp}`, sessionId: claudeId },
+      ];
       for (let turn = 0; turn < 4; turn++) {
         time += 240000;
         claudeRows.push({
