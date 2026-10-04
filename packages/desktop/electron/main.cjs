@@ -7,6 +7,7 @@ const {
   Menu,
   Tray,
   nativeImage,
+  safeStorage,
 } = require("electron");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -16,6 +17,8 @@ const { spawn } = require("node:child_process");
 const { randomUUID } = require("node:crypto");
 const security = require("./security.cjs");
 const { runCommand } = require("./runner.cjs");
+const { createOpenRouter } = require("./accounts.cjs");
+const { createClaudeDesktop } = require("./claude-desktop.cjs");
 const pkg = require("../package.json");
 const enginePath = app.isPackaged
   ? path.join(process.resourcesPath, "engine", "tokscale.exe")
@@ -56,6 +59,23 @@ try {
 }
 const settingsPath = () =>
   path.join(app.getPath("userData"), "desktop-settings.json");
+let preferenceWrites = Promise.resolve();
+function savePreferences(patch) {
+  const task = preferenceWrites.then(async () => {
+    const merged = { ...preferences, ...patch };
+    await fs.mkdir(app.getPath("userData"), { recursive: true });
+    const temp = settingsPath() + "." + randomUUID() + ".tmp";
+    try {
+      await fs.writeFile(temp, JSON.stringify(merged, null, 2), "utf8");
+      await fs.rename(temp, settingsPath());
+      preferences = merged;
+    } finally {
+      await fs.rm(temp, { force: true });
+    }
+  });
+  preferenceWrites = task.catch(() => {});
+  return task;
+}
 const smoke = process.argv.includes("--desktop-smoke");
 const switchValue = (name) =>
   process.argv
@@ -124,6 +144,111 @@ function terminal(id) {
   return terminals.get(id);
 }
 function wireApi() {
+  const claudeDesktop = createClaudeDesktop({ env: engineEnv() });
+  handle("claudeDesktopStatus", () => claudeDesktop.status());
+  handle("claudeDesktopRefresh", async () => {
+    const result = smoke
+      ? {
+          detected: true,
+          source: "Generated desktop account",
+          checkedAt: new Date().toISOString(),
+          metrics: [
+            { label: "5-hour usage", used_percent: 25, resets_at: null },
+            { label: "Weekly usage", used_percent: 40, resets_at: null },
+          ],
+          samples: [
+            { timestamp: 1791054000000, fiveHour: 20, sevenDay: 35 },
+            { timestamp: 1791057600000, fiveHour: 25, sevenDay: 40 },
+          ],
+        }
+      : await claudeDesktop.refresh();
+    // Retain consent to reuse the desktop sign-in, never a duplicate token.
+    await savePreferences({ claudeDesktopConnected: true });
+    return result;
+  });
+  handle("claudeDesktopDisconnect", async () => {
+    await savePreferences({ claudeDesktopConnected: false });
+    return { connected: false };
+  });
+  const openrouter = createOpenRouter({
+    file: path.join(app.getPath("userData"), "openrouter-connection.json"),
+    safeStorage,
+    ...(smoke
+      ? {
+          fetchImpl: async () => ({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              data: { total_credits: 100.5, total_usage: 25.75 },
+            }),
+          }),
+        }
+      : {}),
+  });
+  async function findApplication(name) {
+    if (smoke) return null;
+    const roots = (process.env.PATH || "")
+      .split(path.delimiter)
+      .filter(Boolean);
+    const candidates = [
+      path.join(
+        process.env.LOCALAPPDATA || "",
+        "Programs/Antigravity/Antigravity.exe",
+      ),
+      ...roots.map((root) => path.join(root, "Antigravity.exe")),
+    ];
+    for (const candidate of candidates) {
+      try {
+        if ((await fs.stat(candidate)).isFile()) return candidate;
+      } catch {}
+    }
+    return null;
+  }
+  handle("connectionStatus", async () => {
+    return {
+      antigravityInstalled: Boolean(await findApplication("antigravity")),
+      claudeDesktopConnected: Boolean(preferences.claudeDesktopConnected),
+    };
+  });
+  handle("providerAction", async (action) => {
+    if (action === "antigravity-status" || action === "antigravity-sync") {
+      const result = await run([
+        "antigravity",
+        action === "antigravity-sync" ? "sync" : "status",
+        ...(action === "antigravity-status" ? ["--json"] : []),
+      ]);
+      if (result.code !== 0)
+        throw new Error(
+          result.stderr ||
+            "Antigravity could not be reached. Open it and sign in first.",
+        );
+      return action === "antigravity-status"
+        ? JSON.parse(result.stdout)
+        : { synced: true };
+    }
+    if (smoke)
+      throw new Error(
+        "Account login and application launch are disabled during synthetic checks.",
+      );
+    if (action === "antigravity-open") {
+      const exe = await findApplication("antigravity");
+      if (!exe)
+        throw new Error(
+          "Open Antigravity from your Start menu, sign in, then click Detect.",
+        );
+      const error = await shell.openPath(exe);
+      if (error)
+        throw new Error(
+          "Could not open Antigravity. Open it from your Start menu.",
+        );
+      return { opened: true };
+    }
+    throw new Error("Unsupported connection action");
+  });
+  handle("openRouterStatus", () => openrouter.status());
+  handle("openRouterConnect", (key) => openrouter.connect(key));
+  handle("openRouterRefresh", () => openrouter.refresh());
+  handle("openRouterDisconnect", () => openrouter.disconnect());
   handle("getInfo", () => ({
     version: pkg.version,
     engineVersion: "4.17.0",
@@ -274,15 +399,11 @@ function wireApi() {
   handle("getSettings", () => preferences);
   handle("saveSettings", async (value) => {
     const next = security.settings(value);
+    delete next.claudeDesktopConnected;
     const home = next.home;
     if (home && !(await fs.stat(home)).isDirectory())
       throw new Error("Home must be a folder");
-    const merged = { ...preferences, ...next };
-    await fs.mkdir(app.getPath("userData"), { recursive: true });
-    const temp = settingsPath() + "." + randomUUID() + ".tmp";
-    await fs.writeFile(temp, JSON.stringify(merged, null, 2), "utf8");
-    await fs.rename(temp, settingsPath());
-    preferences = merged;
+    await savePreferences(next);
   });
   handle("windowControl", (action) => {
     if (!["minimize", "maximize", "close"].includes(action))

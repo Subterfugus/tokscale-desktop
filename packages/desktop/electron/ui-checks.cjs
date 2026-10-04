@@ -6,11 +6,14 @@ const assert = require("node:assert/strict");
 // These exercise the actual bundled React renderer and native bridge.
 async function runUiChecks({ window, output }) {
   const checks = [];
-  const exec = (fn, arg) =>
-    window.webContents.executeJavaScript(
-      `(${fn.toString()})(${JSON.stringify(arg) ?? "undefined"})`,
+  const exec = async (fn, arg) => {
+    const result = await window.webContents.executeJavaScript(
+      `Promise.resolve().then(() => (${fn.toString()})(${JSON.stringify(arg) ?? "undefined"})).then(value => ({value}), error => ({error:error.message}))`,
       true,
     );
+    if (result.error) throw new Error(result.error);
+    return result.value;
+  };
   const wait = async (fn, arg, message) => {
     for (let attempt = 0; attempt < 100; attempt++) {
       const value = await exec(fn, arg);
@@ -213,6 +216,58 @@ async function runUiChecks({ window, output }) {
   );
   await nav("Integrations");
   await snapshot("integrations");
+  const connectionText = await exec(
+    () => document.querySelector(".connection-section").innerText,
+  );
+  assert.match(connectionText, /Connect Claude desktop/);
+  assert.match(connectionText, /Antigravity/);
+  assert.match(connectionText, /Connect OpenRouter/);
+  await click(".connection-card button", "Connect Claude desktop");
+  await wait(() =>
+    document
+      .querySelector(".connection-card")
+      ?.innerText.includes("25.0% used"),
+  );
+  await exec(() => {
+    const input = document.querySelector(
+      'input[aria-label="OpenRouter management key"]',
+    );
+    Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    ).set.call(input, "sk-or-v1-FAKE_SYNTHETIC_TEST_KEY_ONLY");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await click(".connection-card button", "Connect OpenRouter");
+  await wait(() =>
+    document.querySelector(".connection-section")?.innerText.includes("$74.75"),
+  );
+  assert.equal(
+    await exec(
+      () =>
+        document.querySelector('input[aria-label="OpenRouter management key"]')
+          ?.value || "",
+    ),
+    "",
+  );
+  await snapshot("connections");
+  await click(".connection-card button", "Detect");
+  await wait(() => !document.querySelector(".connection-section .spin"));
+  await click(".connection-card button", "Disconnect");
+  await wait(() =>
+    [...document.querySelectorAll(".connection-card button")].some(
+      (button) =>
+        button.textContent.includes("Connect Claude desktop") &&
+        !button.disabled,
+    ),
+  );
+  await click(".connection-card button", "Disconnect");
+  await wait(() =>
+    document.querySelector('input[aria-label="OpenRouter management key"]'),
+  );
+  checks.push(
+    "Desktop Claude connect, OpenRouter encrypted save/balance/disconnect and Antigravity detection work with synthetic provider replies",
+  );
   await nav("Settings");
   await snapshot("settings");
   await click(".segmented button", "Light");

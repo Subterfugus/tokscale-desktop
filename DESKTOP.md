@@ -20,7 +20,21 @@ The application runs in a Windows window and loads its interface from bundled fi
 | Command center | Original interactive TUI, editable CLI arguments, command discovery, native terminal fallback |
 | Settings | Dark/light/system themes, refresh intervals, report home, desktop preferences |
 
+## Connect Claude desktop, Antigravity, and OpenRouter
+
+Open **Integrations** for the connection cards. Connected Claude desktop usage and OpenRouter balances also appear under **Subscription quotas**.
+
+- **Claude desktop:** sign in to the existing Claude app, then click **Connect Claude desktop**. The desktop addition recognizes direct-download and Microsoft Store profiles, unlocks the existing OAuth cache with Windows DPAPI in memory, and queries Anthropic's subscription usage endpoint. No Claude Code helper or copied credential file is required. It also reads `plan-usage-history.json` and displays saved utilization snapshots for the latest organization. This is quota history; transcript token accounting remains handled by the original engine. Disconnect stops automatic desktop usage requests without signing out of Claude.
+- **Antigravity:** open and sign in to Antigravity, click **Detect**, then **Sync usage**. These buttons invoke the original engine's status and sync commands directly. Its local service also supplies subscription quotas when available. No separate API key is required.
+- **OpenRouter:** create a management key using the card's link, paste it into the masked field, and click **Connect OpenRouter**. The app reads purchased credits, total spending, and remaining credits from `GET /api/v1/credits`; ordinary inference keys cannot access this account endpoint. The key is verified before being saved, encrypted through Electron's Windows credential protection, and removed from this app when disconnected. The app does not change OpenRouter keys or billing settings.
+
+Claude desktop and OpenRouter account readers are additions in this fork; the original Tokscale engine remains unchanged. Desktop storage and subscription endpoints are not stable public contracts, so errors remain visible and reconnecting may be necessary after provider updates. Claude rate-limit responses trigger a cooldown. No desktop reader refreshes or modifies Claude's own sign-in files.
+
+The Windows Claude storage layout was checked against the installed app and its live usage endpoint. See the [Claude Account Switcher description](https://github.com/SnlperStripes/claude-account-switcher#how-it-works) for corroborating storage details and [OpenRouter's account credits reference](https://openrouter.ai/docs/api/api-reference/credits/get-remaining-credits) for the management-key requirement.
+
 The screenshot contains invented activity, not a real user's usage. The application discovers local activity when opened normally.
+
+![Account connection cards using synthetic provider replies](packages/desktop/assets/desktop-connections.png)
 
 ## Build and run
 

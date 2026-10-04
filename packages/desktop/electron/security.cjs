@@ -85,6 +85,7 @@ function settings(value) {
     "launchAtLogin",
     "minimizeToTray",
     "includeGeminiThoughts",
+    "claudeDesktopConnected",
   ])
     if (value[key] !== undefined) {
       if (typeof value[key] !== "boolean")

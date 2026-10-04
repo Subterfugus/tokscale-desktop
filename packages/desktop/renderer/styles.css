@@ -2,6 +2,147 @@
   font-family: Workspace;
   src: local("Segoe UI Variable Text"), local("Segoe UI");
 }
+.connection-section {
+  margin-bottom: 30px;
+}
+.connection-intro {
+  margin-bottom: 20px;
+}
+.connection-intro h2 {
+  margin: 0 0 8px;
+  font-size: 22px;
+}
+.connection-intro p,
+.connection-body > p {
+  color: var(--secondary);
+  line-height: 1.65;
+}
+.connection-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+.quota-connections {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 24px;
+}
+.connection-card .panel-head {
+  padding-bottom: 0;
+}
+.connection-body {
+  padding: 0 22px 22px;
+}
+.connection-eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.13em;
+  color: var(--muted);
+}
+.connection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0;
+}
+.connection-detail {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.65;
+}
+.connection-key {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+.connection-key input {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--field);
+  color: var(--text);
+}
+.connection-balances {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  padding: 18px 0;
+}
+.connection-balances div {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.connection-balances strong {
+  font-size: 24px;
+}
+.connection-balances small,
+.connection-stat span {
+  color: var(--secondary);
+  font-size: 12px;
+}
+.connection-stat {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  padding: 16px 0;
+}
+.connection-stat strong {
+  font-size: 28px;
+}
+.connection-stat small {
+  flex-basis: 100%;
+  color: var(--muted);
+}
+.connection-quota > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+.connection-quota small {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.connection-quota progress {
+  width: 100%;
+  height: 5px;
+  accent-color: var(--violet);
+}
+.connection-history {
+  margin-top: 20px;
+}
+.connection-history > div {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+}
+.connection-history span,
+.connection-history p {
+  color: var(--muted);
+  font-size: 11px;
+}
+.connection-history svg {
+  width: 100%;
+  margin-top: 16px;
+}
+@media (max-width: 1300px) {
+  .connection-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .connection-section .connection-grid > :last-child {
+    grid-column: 1 / -1;
+  }
+}
 * {
   box-sizing: border-box;
 }

@@ -7,6 +7,11 @@ import React, {
 } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  ConnectionCards,
+  OpenRouterCard,
+  ClaudeDesktopCard,
+} from "./connections.jsx";
+import {
   Activity,
   ArrowDown,
   ArrowUp,
@@ -744,122 +749,130 @@ function Quotas({ epoch, refresh, toCommand }) {
   const state = useReport(["usage", "--json", "--no-spinner"], epoch);
   const rows = Array.isArray(state.data) ? state.data : [];
   return (
-    <ReportState state={state} onRetry={refresh}>
-      <div className="notice">
-        <ShieldCheck size={16} />
-        <span>
-          Live subscription limits from your connected accounts. Date and client
-          filters apply to usage reports, not quotas.
-        </span>
+    <>
+      <div className="connection-grid quota-connections">
+        <ClaudeDesktopCard epoch={epoch} />
+        <OpenRouterCard epoch={epoch} />
       </div>
-      {!rows.length ? (
-        <Empty
-          title="No quota data returned"
-          text="Tokscale couldn't find an accessible subscription account. Open Integrations to inspect client connections; the original usage command can show provider diagnostics."
-          action={
-            <button
-              className="button"
-              onClick={() => toCommand("--no-spinner usage --light")}
-            >
-              Inspect quota diagnostics <TerminalSquare size={14} />
-            </button>
-          }
-        />
-      ) : (
-        <div className="quota-grid">
-          {rows.map((r, i) => (
-            <Panel
-              key={i}
-              className="quota-card"
-              title={pretty(r.provider)}
-              description={[r.plan, r.account?.label, r.email]
-                .filter(Boolean)
-                .join(" · ")}
-              action={
-                <span className="badge green">
-                  {r.account?.is_active ? "Active account" : "Connected"}
-                </span>
-              }
-            >
-              {r.metrics?.map((m, j) => (
-                <div className="quota-metric" key={j}>
-                  <div>
-                    <b>{m.label}</b>
-                    <strong>
-                      {pct(m.remaining_percent)} <small>left</small>
-                    </strong>
-                  </div>
-                  <div className="progress">
-                    <i
-                      style={{
-                        width: `${Math.min(100, Math.max(0, m.used_percent))}%`,
-                        background:
-                          m.remaining_percent < 15
-                            ? "var(--orange)"
-                            : "var(--violet)",
-                      }}
-                    />
-                  </div>
-                  <div className="quota-detail">
-                    <span>
-                      {pct(m.used_percent)} used
-                      {m.remaining_label ? ` · ${m.remaining_label}` : ""}
-                    </span>
-                    <span>
-                      <Clock size={11} />
-                      {m.resets_at
-                        ? `Resets ${dateTime(m.resets_at)}`
-                        : "No reset reported"}
-                    </span>
-                  </div>
-                </div>
-              ))}
-              {r.credit_status && (
-                <div className="account-detail">
-                  Credits:{" "}
-                  {r.credit_status.unlimited
-                    ? "Unlimited"
-                    : (r.credit_status.balance ??
-                      (r.credit_status.has_credits == null
-                        ? "Not reported"
-                        : r.credit_status.has_credits
-                          ? "Available"
-                          : "None"))}
-                  {r.credit_status.overage_limit_reached
-                    ? " · Overage limit reached"
-                    : ""}
-                </div>
-              )}
-              {r.reset_credits && (
-                <details className="account-detail">
-                  <summary>
-                    {r.reset_credits.available_count} reset credits available
-                  </summary>
-                  <pre>{JSON.stringify(r.reset_credits.credits, null, 2)}</pre>
-                </details>
-              )}
-              {r.spend_control && (
-                <div className="account-detail">
-                  Individual spend limit:{" "}
-                  {r.spend_control.individual_limit ?? "Not reported"}
-                  {r.spend_control.reached ? " · Reached" : ""}
-                </div>
-              )}
-            </Panel>
-          ))}
+      <ReportState state={state} onRetry={refresh}>
+        <div className="notice">
+          <ShieldCheck size={16} />
+          <span>
+            Live subscription limits from your connected accounts. Date and
+            client filters apply to usage reports, not quotas.
+          </span>
         </div>
-      )}
-      <div className="footnote">
-        Quota fetch failures may be omitted by the original JSON report. Use
-        “Inspect quota diagnostics” for full provider status.
-      </div>
-      <button
-        className="text-button"
-        onClick={() => toCommand("--no-spinner usage --light")}
-      >
-        Inspect quota diagnostics <ChevronRight size={14} />
-      </button>
-    </ReportState>
+        {!rows.length ? (
+          <Empty
+            title="No additional provider quota data returned"
+            text="The original engine returned no additional subscription data. Claude desktop and OpenRouter are shown above; provider diagnostics can help with missing accounts."
+            action={
+              <button
+                className="button"
+                onClick={() => toCommand("--no-spinner usage --light")}
+              >
+                Inspect quota diagnostics <TerminalSquare size={14} />
+              </button>
+            }
+          />
+        ) : (
+          <div className="quota-grid">
+            {rows.map((r, i) => (
+              <Panel
+                key={i}
+                className="quota-card"
+                title={pretty(r.provider)}
+                description={[r.plan, r.account?.label, r.email]
+                  .filter(Boolean)
+                  .join(" · ")}
+                action={
+                  <span className="badge green">
+                    {r.account?.is_active ? "Active account" : "Connected"}
+                  </span>
+                }
+              >
+                {r.metrics?.map((m, j) => (
+                  <div className="quota-metric" key={j}>
+                    <div>
+                      <b>{m.label}</b>
+                      <strong>
+                        {pct(m.remaining_percent)} <small>left</small>
+                      </strong>
+                    </div>
+                    <div className="progress">
+                      <i
+                        style={{
+                          width: `${Math.min(100, Math.max(0, m.used_percent))}%`,
+                          background:
+                            m.remaining_percent < 15
+                              ? "var(--orange)"
+                              : "var(--violet)",
+                        }}
+                      />
+                    </div>
+                    <div className="quota-detail">
+                      <span>
+                        {pct(m.used_percent)} used
+                        {m.remaining_label ? ` · ${m.remaining_label}` : ""}
+                      </span>
+                      <span>
+                        <Clock size={11} />
+                        {m.resets_at
+                          ? `Resets ${dateTime(m.resets_at)}`
+                          : "No reset reported"}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+                {r.credit_status && (
+                  <div className="account-detail">
+                    Credits:{" "}
+                    {r.credit_status.unlimited
+                      ? "Unlimited"
+                      : (r.credit_status.balance ??
+                        (r.credit_status.has_credits == null
+                          ? "Not reported"
+                          : r.credit_status.has_credits
+                            ? "Available"
+                            : "None"))}
+                    {r.credit_status.overage_limit_reached
+                      ? " · Overage limit reached"
+                      : ""}
+                  </div>
+                )}
+                {r.reset_credits && (
+                  <details className="account-detail">
+                    <summary>
+                      {r.reset_credits.available_count} reset credits available
+                    </summary>
+                    <pre>
+                      {JSON.stringify(r.reset_credits.credits, null, 2)}
+                    </pre>
+                  </details>
+                )}
+                {r.spend_control && (
+                  <div className="account-detail">
+                    Individual spend limit:{" "}
+                    {r.spend_control.individual_limit ?? "Not reported"}
+                    {r.spend_control.reached ? " · Reached" : ""}
+                  </div>
+                )}
+              </Panel>
+            ))}
+          </div>
+        )}
+        <div className="footnote">
+          Quota fetch failures may be omitted by the original JSON report. Use
+          “Inspect quota diagnostics” for full provider status.
+        </div>
+        <button
+          className="text-button"
+          onClick={() => toCommand("--no-spinner usage --light")}
+        >
+          Inspect quota diagnostics <ChevronRight size={14} />
+        </button>
+      </ReportState>
+    </>
   );
 }
 function Models({ args, epoch, refresh, projects = false }) {
@@ -1224,142 +1237,145 @@ function Integrations({ epoch, refresh, toCommand }) {
     `${r.client} ${r.label}`.toLowerCase().includes(search.toLowerCase()),
   );
   return (
-    <ReportState state={state} onRetry={refresh}>
-      <div className="notice">
-        <Plug size={16} />
-        <span>
-          Local scan paths and original account tools. Sharing requires an
-          explicit submit action.
-        </span>
-      </div>
-      <div className="view-toolbar">
-        <label className="search">
-          <Search size={15} />
-          <input
-            aria-label="Find integration"
-            placeholder="Find an integration…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </label>
-        <button
-          className="button small"
-          onClick={() => toCommand("clients --no-spinner")}
-        >
-          Full diagnostics <TerminalSquare size={14} />
-        </button>
-      </div>
-      <div className="integration-grid">
-        {clients.map((r) => (
-          <Panel
-            key={r.client}
-            title={r.label || pretty(r.client)}
-            description={r.client}
-            action={
-              <span className={`badge ${r.messageCount ? "green" : ""}`}>
-                {r.messageCount
-                  ? "Activity found"
-                  : r.sessionsPathExists
-                    ? "Path found"
-                    : "Not detected"}
-              </span>
-            }
+    <>
+      <ConnectionCards epoch={epoch} refresh={refresh} />
+      <ReportState state={state} onRetry={refresh}>
+        <div className="notice">
+          <Plug size={16} />
+          <span>
+            Local scan paths and original account tools. Sharing requires an
+            explicit submit action.
+          </span>
+        </div>
+        <div className="view-toolbar">
+          <label className="search">
+            <Search size={15} />
+            <input
+              aria-label="Find integration"
+              placeholder="Find an integration…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </label>
+          <button
+            className="button small"
+            onClick={() => toCommand("clients --no-spinner")}
           >
-            <div className="integration-stat">
-              <strong>{compact(r.messageCount)}</strong>
-              <span>local messages</span>
-            </div>
-            <div className="integration-path" title={r.sessionsPath}>
-              <FolderOpen size={13} />
-              <span>{r.sessionsPath || "No local session path"}</span>
-            </div>
-            {r.headlessSupported && (
-              <div className="integration-extra">
-                Headless supported · {number(r.headlessMessageCount)} messages
-              </div>
-            )}
-            {r.exporterStatus && (
-              <div className="integration-extra">
-                Exporter:{" "}
-                {typeof r.exporterStatus === "string"
-                  ? r.exporterStatus
-                  : JSON.stringify(r.exporterStatus)}
-              </div>
-            )}
-            <details className="integration-extra">
-              <summary>Paths and diagnostics</summary>
-              <pre>
-                {safeMessage(
-                  JSON.stringify(
-                    {
-                      additionalPaths: r.additionalPaths,
-                      legacyPaths: r.legacyPaths,
-                      headlessPaths: r.headlessPaths,
-                      extraPaths: r.extraPaths,
-                      diagnostics: r.diagnostics,
-                    },
-                    null,
-                    2,
-                  ),
-                )}
-              </pre>
-            </details>
-            <button
-              className="text-button"
-              onClick={() =>
-                toCommand(
-                  [
-                    "codex",
-                    "cursor",
-                    "trae",
-                    "warp",
-                    "antigravity",
-                    "hindsight",
-                  ].includes(r.client)
-                    ? r.client + " --help"
-                    : "clients --help",
-                )
+            Full diagnostics <TerminalSquare size={14} />
+          </button>
+        </div>
+        <div className="integration-grid">
+          {clients.map((r) => (
+            <Panel
+              key={r.client}
+              title={r.label || pretty(r.client)}
+              description={r.client}
+              action={
+                <span className={`badge ${r.messageCount ? "green" : ""}`}>
+                  {r.messageCount
+                    ? "Activity found"
+                    : r.sessionsPathExists
+                      ? "Path found"
+                      : "Not detected"}
+                </span>
               }
             >
-              Account & integration commands <ChevronRight size={14} />
-            </button>
-          </Panel>
-        ))}
-      </div>
-      {!clients.length && (
-        <Empty
-          title="No matching integrations"
-          text="Search another client or inspect the original client diagnostics."
-        />
-      )}
-      {state.data?.note && <div className="footnote">{state.data.note}</div>}
-      <Panel
-        className="space-top"
-        title="Account tools"
-        description="Credentials stay with the original Tokscale engine."
-      >
-        <div className="quick-actions">
-          {[
-            "codex accounts --help",
-            "cursor accounts --help",
-            "login --help",
-            "logout --help",
-            "whoami",
-            "headless --help",
-            "import --help",
-          ].map((c) => (
-            <button
-              key={c}
-              className="button small"
-              onClick={() => toCommand(c)}
-            >
-              <TerminalSquare size={14} />
-              {c.split(" ")[0]}
-            </button>
+              <div className="integration-stat">
+                <strong>{compact(r.messageCount)}</strong>
+                <span>local messages</span>
+              </div>
+              <div className="integration-path" title={r.sessionsPath}>
+                <FolderOpen size={13} />
+                <span>{r.sessionsPath || "No local session path"}</span>
+              </div>
+              {r.headlessSupported && (
+                <div className="integration-extra">
+                  Headless supported · {number(r.headlessMessageCount)} messages
+                </div>
+              )}
+              {r.exporterStatus && (
+                <div className="integration-extra">
+                  Exporter:{" "}
+                  {typeof r.exporterStatus === "string"
+                    ? r.exporterStatus
+                    : JSON.stringify(r.exporterStatus)}
+                </div>
+              )}
+              <details className="integration-extra">
+                <summary>Paths and diagnostics</summary>
+                <pre>
+                  {safeMessage(
+                    JSON.stringify(
+                      {
+                        additionalPaths: r.additionalPaths,
+                        legacyPaths: r.legacyPaths,
+                        headlessPaths: r.headlessPaths,
+                        extraPaths: r.extraPaths,
+                        diagnostics: r.diagnostics,
+                      },
+                      null,
+                      2,
+                    ),
+                  )}
+                </pre>
+              </details>
+              <button
+                className="text-button"
+                onClick={() =>
+                  toCommand(
+                    [
+                      "codex",
+                      "cursor",
+                      "trae",
+                      "warp",
+                      "antigravity",
+                      "hindsight",
+                    ].includes(r.client)
+                      ? r.client + " --help"
+                      : "clients --help",
+                  )
+                }
+              >
+                Account & integration commands <ChevronRight size={14} />
+              </button>
+            </Panel>
           ))}
         </div>
-      </Panel>
-    </ReportState>
+        {!clients.length && (
+          <Empty
+            title="No matching integrations"
+            text="Search another client or inspect the original client diagnostics."
+          />
+        )}
+        {state.data?.note && <div className="footnote">{state.data.note}</div>}
+        <Panel
+          className="space-top"
+          title="Account tools"
+          description="Credentials stay with the original Tokscale engine."
+        >
+          <div className="quick-actions">
+            {[
+              "codex accounts --help",
+              "cursor accounts --help",
+              "login --help",
+              "logout --help",
+              "whoami",
+              "headless --help",
+              "import --help",
+            ].map((c) => (
+              <button
+                key={c}
+                className="button small"
+                onClick={() => toCommand(c)}
+              >
+                <TerminalSquare size={14} />
+                {c.split(" ")[0]}
+              </button>
+            ))}
+          </div>
+        </Panel>
+      </ReportState>
+    </>
   );
 }
 
