@@ -28,7 +28,8 @@ const { createPreferences } = require("./preferences.cjs");
 const { resolveTheme } = require("./themes.cjs");
 const { createMini, shouldOpenOnStartup } = require("./mini-window.cjs");
 const { createAppWatcher } = require("./ai-app-watcher.cjs");
-const { createLimitMonitor, tooltip } = require("./limit-monitor.cjs");
+const { createLimitMonitor, formatStatus, tooltip } = require("./limit-monitor.cjs");
+const { createLimitHistory } = require("./limit-history.cjs");
 const { createUpstreamMonitor, validateState: validateUpstreamState } = require("./upstream-monitor.cjs");
 const pkg = require("../package.json");
 const enginePath = app.isPackaged
@@ -64,6 +65,7 @@ const MINI_API = new Set([
   "connectionStatus",
   "limitSnapshot",
   "miniControl",
+  "miniMoveBy",
 ]);
 // Started by the login item: stay in the tray until opened.
 const startHidden = process.argv.includes("--hidden");
@@ -76,6 +78,7 @@ let preferences = {
   upstreamNotifications: true,
   miniLaunchOnStartup: true,
   miniOnAiApps: true,
+  miniMicro: false,
 };
 let pty;
 try {
@@ -157,6 +160,8 @@ function refreshTray() {
   const lines = [...(status?.lines || [])];
   if (status?.error) lines.push("Limits check: " + status.error);
   tray.setToolTip(tooltip(lines, "Tokscale Desktop"));
+  const menuLines = status ? formatStatus(status.sources, true) : [];
+  if (status?.error) menuLines.push("Limits check: " + status.error);
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: "Open Tokscale", click: showMain },
@@ -167,8 +172,8 @@ function refreshTray() {
         click: (item) => setMiniVisible(item.checked),
       },
       { type: "separator" },
-      ...(lines.length
-        ? lines.map((label) => ({ label, enabled: false }))
+      ...(menuLines.length
+        ? menuLines.map((label) => ({ label, enabled: false }))
         : [{ label: "No usage limits to show", enabled: false }]),
       { type: "separator" },
       { label: "Quit", click: () => { quitting = true; app.quit(); } },
@@ -179,6 +184,7 @@ function refreshTray() {
 // own quota report; the desktop reading wins when both describe Claude.
 async function limitSources() {
   const sources = [];
+  const samples = {};
   // Several accounts can share a provider; the account keeps their ids apart.
   const add = (provider, metrics, account = "") => {
     for (const metric of Array.isArray(metrics) ? metrics : [])
@@ -195,6 +201,8 @@ async function limitSources() {
   if (preferences.claudeDesktopConnected && !claudeDisconnecting)
     await claudeRequests.refresh({}).then((result) => {
       add("Claude", result.metrics);
+      for (const source of sources.filter(source => source.provider === "Claude" && /^Weekly usage$/i.test(source.label)))
+        samples[source.id] = (Array.isArray(result.samples) ? result.samples : []).map(sample => ({ t: sample.timestamp, p: sample.sevenDay }));
       desktopClaude = sources.some(source => source.provider === "Claude" && Number.isFinite(source.usedPercent));
     }, (error) => failures.push(error));
   await run(["usage", "--json"]).then((result) => {
@@ -208,7 +216,7 @@ async function limitSources() {
     }
   }).catch((error) => failures.push(error));
   if (!sources.length && failures.length) throw failures[0];
-  return { sources, error: failures.length ? "Some usage limits could not be refreshed" : null };
+  return { sources, samples, error: failures.length ? "Some usage limits could not be refreshed" : null };
 }
 // Native window buttons, menus and form popups follow the app's appearance.
 const chrome = () => {
@@ -587,7 +595,7 @@ function wireApi() {
   handle("saveSettings", async (value) => {
     const next = security.settings(value);
     // These are owned by the main process and follow real state.
-    for (const key of ["claudeDesktopConnected", "miniOpen", "miniBounds"]) delete next[key];
+    for (const key of ["claudeDesktopConnected", "miniOpen", "miniBounds", "miniMicro", "miniMicroBounds"]) delete next[key];
     const home = next.home;
     if (home && !(await fs.stat(home)).isDirectory())
       throw new Error("Home must be a folder");
@@ -597,7 +605,13 @@ function wireApi() {
     if (action === "main") showMain();
     else if (action === "close") setMiniVisible(false);
     else if (action === "toggle") setMiniVisible(!mini?.isVisible());
+    else if (action === "micro") return mini?.collapse();
+    else if (action === "expand") return mini?.expand();
     else throw new Error("Invalid mini window action");
+  });
+  handle("miniMoveBy", (dx, dy) => {
+    if (!mini) throw new Error("Mini movement requires micro mode");
+    return mini.moveBy(dx, dy);
   });
   handle("windowControl", (action) => {
     if (!["minimize", "maximize", "close"].includes(action))
@@ -817,7 +831,10 @@ else {
       });
       // Both windows and the tray read one monitor, including the first mini
       // render. Synthetic checks never access live account credentials.
+      const limitHistory = createLimitHistory(path.join(app.getPath("userData"), "limit-history.json"));
+      await limitHistory.load();
       monitor = createLimitMonitor({
+        history: limitHistory,
         getSources: smoke ? async () => [
           { id: "claude:5-hour", provider: "Claude", label: "5-hour usage", usedPercent: 25, resetsAt: null },
           { id: "claude:weekly", provider: "Claude", label: "Weekly usage", usedPercent: 40, resetsAt: null },
@@ -841,8 +858,13 @@ else {
         htmlPath: miniPath,
         iconPath,
         smoke,
-        getState: () => ({ bounds: preferences.miniBounds, theme: miniTheme() }),
-        saveState: ({ bounds }) => void savePreferences({ miniBounds: bounds }).catch(() => {}),
+        animationMs: smoke ? 0 : 190,
+        getState: () => ({ bounds: preferences.miniBounds, micro: preferences.miniMicro, microBounds: preferences.miniMicroBounds, theme: miniTheme() }),
+        saveState: ({ bounds, micro, microBounds }) => savePreferences({
+          ...(bounds ? { miniBounds: bounds } : {}),
+          ...(micro !== undefined ? { miniMicro: micro } : {}),
+          ...(microBounds ? { miniMicroBounds: microBounds } : {}),
+        }),
         onVisibility: miniVisibilityChanged,
       });
       appWatcher = createAppWatcher({

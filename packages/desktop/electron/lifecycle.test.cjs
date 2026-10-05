@@ -68,3 +68,9 @@ test('older or absent Codex indexes degrade to identifiers, never inferred conve
   assert.equal((await getSessionTitles(home)).titles.old,'Saved title');
   await assert.rejects(getSessionTitles('relative'),/Invalid home/);
 });
+
+test('mini window hidden limits accept unique ids only',()=>{
+  assert.deepEqual(security.settings({miniHiddenLimits:['claude::weekly usage','claude::weekly usage','codex::5-hour']}).miniHiddenLimits,['claude::weekly usage','codex::5-hour']);
+  assert.deepEqual(security.settings({miniHiddenLimits:[]}).miniHiddenLimits,[]);
+  for(const bad of ['claude',[1],[''],['x'.repeat(301)]]) assert.throws(()=>security.settings({miniHiddenLimits:bad}),/Invalid mini window limits/);
+});

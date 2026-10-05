@@ -4,6 +4,7 @@ const MINI_WIDTH = 300;
 const MINI_HEIGHT = 230;
 const MINI_MIN_WIDTH = 280;
 const MINI_MIN_HEIGHT = 230;
+const MICRO_SIZE = 64;
 const MARGIN = 16;
 
 const finite = (value) => typeof value === "number" && Number.isFinite(value);
@@ -72,14 +73,113 @@ function resolvePosition(saved, workAreas, primaryWorkArea, size = { width: MINI
   return defaultPosition(primaryWorkArea, size, margin);
 }
 
-function createMini({ BrowserWindow, screen, preloadPath, htmlPath, iconPath, smoke = false, getState, saveState, onVisibility = () => {} }) {
+function clampMicroBounds(position, area) {
+  return {
+    x: Math.round(Math.max(area.x, Math.min(position.x, area.x + area.width - MICRO_SIZE))),
+    y: Math.round(Math.max(area.y, Math.min(position.y, area.y + area.height - MICRO_SIZE))),
+    width: MICRO_SIZE,
+    height: MICRO_SIZE,
+  };
+}
+
+function nearestWorkArea(position, areas, primary) {
+  const containing = areas.find(area => position.x >= area.x && position.x < area.x + area.width && position.y >= area.y && position.y < area.y + area.height);
+  if (containing) return containing;
+  let nearest = primary, distance = Infinity;
+  for (const area of areas) {
+    const dx = Math.max(area.x - position.x, 0, position.x - (area.x + area.width));
+    const dy = Math.max(area.y - position.y, 0, position.y - (area.y + area.height));
+    if (dx * dx + dy * dy < distance) { nearest = area; distance = dx * dx + dy * dy; }
+  }
+  return nearest;
+}
+
+function resolveMicroBounds(saved, expanded, areas, primary) {
+  const size = { width: MICRO_SIZE, height: MICRO_SIZE };
+  if (isOnScreen(saved, areas, size)) return { x: Math.round(saved.x), y: Math.round(saved.y), ...size };
+  const position = { x: expanded.x + expanded.width - MICRO_SIZE, y: expanded.y };
+  return clampMicroBounds(position, nearestWorkArea(position, areas, primary));
+}
+
+// Moving the bubble anchors the expanded window's top-right to the bubble's.
+function expandBounds(expanded, bubble, moved, areas, primary) {
+  if (!moved) return resolveBounds(expanded, areas, primary);
+  const saved = { ...expanded, x: bubble.x + MICRO_SIZE - expanded.width, y: bubble.y };
+  const area = nearestWorkArea(bubble, areas, primary);
+  return resolveBounds(saved, [area], area);
+}
+
+function moveMicroBounds(current, dx, dy, areas, primary) {
+  if (!finite(dx) || !finite(dy)) throw new Error("Invalid mini movement");
+  const position = {
+    x: current.x + Math.max(-4000, Math.min(4000, dx)),
+    y: current.y + Math.max(-4000, Math.min(4000, dy)),
+  };
+  return clampMicroBounds(position, nearestWorkArea(position, areas, primary));
+}
+
+function createMini({ BrowserWindow, screen, preloadPath, htmlPath, iconPath, smoke = false, getState, saveState, onVisibility = () => {}, setTimer = setTimeout, clearTimer = clearTimeout, animationMs = 0 }) {
   const htmlUrl = pathToFileURL(htmlPath).href;
   let win = null;
   let destroyed = false;
   let wantedVisible = false;
   let boundsTimer = null;
+  let micro = Boolean(getState().micro);
+  let expandedBounds = null;
+  let bubbleOrigin = null;
+  let changingBounds = false;
+  let transitions = Promise.resolve();
   const alive = () => Boolean(win) && !win.isDestroyed();
   const background = () => getState().theme.colors.page;
+  const areas = () => screen.getAllDisplays().map(display => display.workArea);
+  const primary = () => screen.getPrimaryDisplay().workArea;
+
+  function save(patch) {
+    try { return Promise.resolve(saveState(patch)).catch(() => {}); }
+    catch { return Promise.resolve(); }
+  }
+
+  // Ease the native window from one rectangle towards another. The caller
+  // still applies the final bounds, so an interrupted glide ends correctly.
+  async function glide(from, to) {
+    if (!(animationMs > 0) || !alive()) return;
+    changingBounds = true;
+    try {
+      win.setResizable(true);
+      win.setMinimumSize(MICRO_SIZE, MICRO_SIZE);
+      const started = Date.now();
+      for (;;) {
+        await new Promise((resolve) => setTimeout(resolve, 12));
+        const t = (Date.now() - started) / animationMs;
+        if (!alive() || t >= 1) return;
+        const k = 1 - (1 - t) ** 3;
+        const at = (key) => Math.round(from[key] + (to[key] - from[key]) * k);
+        win.setBounds({ x: at("x"), y: at("y"), width: at("width"), height: at("height") });
+      }
+    } finally { changingBounds = false; }
+  }
+
+  function applyBounds(next) {
+    changingBounds = true;
+    try {
+      win.setResizable(true);
+      win.setMinimumSize(micro ? MICRO_SIZE : Math.min(MINI_MIN_WIDTH, next.width), micro ? MICRO_SIZE : Math.min(MINI_MIN_HEIGHT, next.height));
+      win.setBounds(next);
+      if (micro) {
+        win.setResizable(false);
+        // Some Windows frame styles ignore bounds while non-resizable. Retry
+        // while resizable, then check the actual native geometry.
+        // Fractional display scaling can leave the native size a pixel off.
+        const fits = (size) => Math.abs(size.width - MICRO_SIZE) <= 2 && Math.abs(size.height - MICRO_SIZE) <= 2;
+        if (!fits(win.getBounds())) {
+          win.setResizable(true);
+          win.setBounds(next);
+          win.setResizable(false);
+        }
+        if (!fits(win.getBounds())) throw new Error("Mini bubble could not shrink to 64x64");
+      }
+    } finally { changingBounds = false; }
+  }
 
   function bounds(saved = getState()?.bounds) {
     return resolveBounds(
@@ -90,40 +190,40 @@ function createMini({ BrowserWindow, screen, preloadPath, htmlPath, iconPath, sm
   }
 
   function persistBounds() {
-    clearTimeout(boundsTimer);
-    if (!alive()) return;
-    try {
-      Promise.resolve(saveState({ bounds: win.getBounds() })).catch(() => {});
-    } catch {
-      /* Geometry is a convenience; never fail the window. */
-    }
+    clearTimer(boundsTimer);
+    if (!alive() || changingBounds) return;
+    const current = win.getBounds();
+    if (micro) void save({ microBounds: { x: current.x, y: current.y } });
+    else { expandedBounds = current; void save({ bounds: current }); }
   }
 
   function scheduleBoundsSave() {
-    clearTimeout(boundsTimer);
-    boundsTimer = setTimeout(persistBounds, 400);
+    if (changingBounds) return;
+    clearTimer(boundsTimer);
+    boundsTimer = setTimer(persistBounds, 400);
   }
 
   function recoverBounds() {
     if (!alive()) return;
     const current = win.getBounds();
-    const recovered = bounds(current);
-    win.setMinimumSize(Math.min(MINI_MIN_WIDTH, recovered.width), Math.min(MINI_MIN_HEIGHT, recovered.height));
-    if (Object.keys(recovered).some((key) => recovered[key] !== current[key])) win.setBounds(recovered);
+    const recovered = micro ? clampMicroBounds(current, nearestWorkArea(current, areas(), primary())) : bounds(current);
+    applyBounds(recovered);
     persistBounds();
   }
 
   const displayEvents = ["display-added", "display-removed", "display-metrics-changed"];
 
   function create() {
-    const initialBounds = bounds();
+    expandedBounds = bounds();
+    const initialBounds = micro ? resolveMicroBounds(getState().microBounds, expandedBounds, areas(), primary()) : expandedBounds;
+    if (micro) bubbleOrigin = initialBounds;
     win = new BrowserWindow({
       ...initialBounds,
-      minWidth: Math.min(MINI_MIN_WIDTH, initialBounds.width),
-      minHeight: Math.min(MINI_MIN_HEIGHT, initialBounds.height),
+      minWidth: micro ? MICRO_SIZE : Math.min(MINI_MIN_WIDTH, initialBounds.width),
+      minHeight: micro ? MICRO_SIZE : Math.min(MINI_MIN_HEIGHT, initialBounds.height),
       show: false,
       frame: false,
-      resizable: true,
+      resizable: !micro,
       thickFrame: true,
       maximizable: false,
       minimizable: false,
@@ -143,6 +243,7 @@ function createMini({ BrowserWindow, screen, preloadPath, htmlPath, iconPath, sm
         backgroundThrottling: !smoke,
       },
     });
+    if (micro) applyBounds(initialBounds);
     win.setAlwaysOnTop(true, "floating");
     win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     win.webContents.on("will-navigate", (event, url) => {
@@ -171,7 +272,7 @@ function createMini({ BrowserWindow, screen, preloadPath, htmlPath, iconPath, sm
       win.hide();
     });
     win.on("closed", () => {
-      clearTimeout(boundsTimer);
+      clearTimer(boundsTimer);
       for (const event of displayEvents) screen.removeListener(event, recoverBounds);
       win = null;
     });
@@ -179,6 +280,48 @@ function createMini({ BrowserWindow, screen, preloadPath, htmlPath, iconPath, sm
   }
 
   return {
+    collapse() {
+      const task = transitions.then(async () => {
+        if (!alive() || micro) return;
+        clearTimer(boundsTimer);
+        expandedBounds = win.getBounds();
+        await save({ bounds: expandedBounds });
+        if (!alive()) return;
+        const next = resolveMicroBounds(getState().microBounds, expandedBounds, areas(), primary());
+        await glide(expandedBounds, next);
+        if (!alive()) return;
+        micro = true;
+        try { applyBounds(next); }
+        catch (error) { micro = false; applyBounds(expandedBounds); throw error; }
+        bubbleOrigin = win.getBounds();
+        await save({ micro: true, microBounds: { x: bubbleOrigin.x, y: bubbleOrigin.y } });
+      });
+      transitions = task.catch(() => {});
+      return task;
+    },
+    expand() {
+      const task = transitions.then(async () => {
+        if (!alive() || !micro) return;
+        clearTimer(boundsTimer);
+        const current = win.getBounds();
+        const moved = current.x !== bubbleOrigin?.x || current.y !== bubbleOrigin?.y;
+        const next = expandBounds(expandedBounds || bounds(), current, moved, areas(), primary());
+        await glide(current, next);
+        if (!alive()) return;
+        micro = false;
+        applyBounds(next);
+        expandedBounds = win.getBounds();
+        await save({ micro: false, bounds: expandedBounds, microBounds: { x: current.x, y: current.y } });
+      });
+      transitions = task.catch(() => {});
+      return task;
+    },
+    moveBy(dx, dy) {
+      if (!alive() || !micro) throw new Error("Mini movement requires micro mode");
+      applyBounds(moveMicroBounds(win.getBounds(), dx, dy, areas(), primary()));
+      persistBounds();
+    },
+    isMicro() { return micro; },
     show() {
       if (destroyed) return;
       wantedVisible = true;
@@ -208,7 +351,7 @@ function createMini({ BrowserWindow, screen, preloadPath, htmlPath, iconPath, sm
       destroyed = true;
       wantedVisible = false;
       persistBounds();
-      clearTimeout(boundsTimer);
+      clearTimer(boundsTimer);
       if (alive()) win.destroy();
       win = null;
     },
@@ -226,5 +369,9 @@ module.exports = {
   MINI_HEIGHT,
   MINI_MIN_WIDTH,
   MINI_MIN_HEIGHT,
+  MICRO_SIZE,
+  resolveMicroBounds,
+  expandBounds,
+  moveMicroBounds,
   MARGIN,
 };

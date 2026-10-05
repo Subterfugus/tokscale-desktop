@@ -1332,6 +1332,7 @@ tbody tr:last-child td {
   font-variant-numeric: tabular-nums;
 }
 .meter-track {
+  position: relative;
   height: 6px;
   overflow: hidden;
   border-radius: 3px;
@@ -1349,6 +1350,23 @@ tbody tr:last-child td {
   color: var(--text-3);
   font-size: 12px;
 }
+/* Expected-by-now marker; sits above the fill so it stays visible. */
+.meter-pace-mark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--text);
+  opacity: 0.75;
+}
+.meter .meter-pace {
+  overflow-wrap: anywhere;
+  color: var(--text-2);
+}
+.meter .meter-pace.over { color: var(--critical); }
+/* Always green: the accent is a warm red or orange in several themes. */
+.meter .meter-pace.under { color: color-mix(in srgb, var(--good) 75%, var(--text)); }
 .heatmap-wrap {
   --cell: 13px;
   display: grid;
@@ -1665,6 +1683,20 @@ tbody tr:last-child td {
 }
 .setting-control code.path {
   max-width: 220px;
+}
+.setting-row.limit-picker-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+.limit-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px 16px;
+}
+.limit-picker .check-label {
+  min-height: 24px;
+  color: var(--text);
 }
 .setting-row.theme-row {
   flex-direction: column;

@@ -626,6 +626,26 @@ async function runUiChecks({ window, mini, output, terminalCount }) {
     await exec(() => window.tokscale.saveSettings({ miniTheme: "match" }));
     await until(`document.documentElement.dataset.theme === "dark"`, "Mini window did not follow the main theme again");
     checks.push("Mini window shows today's cost, keeps its own theme, and cannot change settings");
+    await exec(() => window.tokscale.saveSettings({ miniHiddenLimits: ["codex:weekly"] }));
+    await until(`document.querySelectorAll(".mini-limit").length === 5 && !document.querySelector(".mini-limits").textContent.includes("Codex · Weekly")`, "Mini window still showed a hidden limit");
+    await exec(() => window.tokscale.saveSettings({ miniHiddenLimits: [] }));
+    await until(`document.querySelectorAll(".mini-limit").length === 6`, "Mini window did not restore a hidden limit");
+    checks.push("Mini window leaves out limits hidden in Settings and restores them");
+    const expandedBounds = mini.getBounds();
+    await inMini(`window.tokscale.miniControl("micro")`);
+    assert.equal(mini.isResizable(), false);
+    assert.ok(mini.getSize().every(side => Math.abs(side - 64) <= 2), "Mini window did not collapse to 64x64");
+    assert.equal(await inMini(`window.tokscale.getSettings().then(settings => settings.miniMicro)`), true);
+    assert.deepEqual(await exec(() => window.tokscale.getSettings().then(settings => settings.miniBounds)), expandedBounds);
+    await inMini(`window.tokscale.miniMoveBy(12, 8)`);
+    assert.ok(Math.abs(mini.getBounds().width - 64) <= 2);
+    await inMini(`window.tokscale.miniControl("expand")`);
+    assert.equal(mini.isResizable(), true);
+    assert.equal(await inMini(`window.tokscale.getSettings().then(settings => settings.miniMicro)`), false);
+    assert.deepEqual(mini.getSize(), [expandedBounds.width, expandedBounds.height]);
+    await assert.rejects(inMini(`window.tokscale.miniMoveBy(1, 1)`));
+    mini.setBounds(expandedBounds);
+    checks.push("Mini bubble collapses to 64x64, moves through IPC, keeps expanded bounds, and expands in the same window");
   }
   await nav("Overview");
   return {

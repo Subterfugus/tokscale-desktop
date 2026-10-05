@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
-const { createMini, shouldOpenOnStartup, defaultPosition, isOnScreen, resolvePosition, resolveBounds, MINI_WIDTH, MINI_HEIGHT, MINI_MIN_WIDTH, MINI_MIN_HEIGHT } = require("./mini-window.cjs");
+const { createMini, shouldOpenOnStartup, defaultPosition, isOnScreen, resolvePosition, resolveBounds, resolveMicroBounds, expandBounds, moveMicroBounds, MICRO_SIZE, MINI_WIDTH, MINI_HEIGHT, MINI_MIN_WIDTH, MINI_MIN_HEIGHT } = require("./mini-window.cjs");
 
 const size = { width: MINI_WIDTH, height: MINI_HEIGHT };
 const primary = { x: 0, y: 0, width: 1920, height: 1040 };
@@ -57,11 +57,12 @@ test("removed monitors recover at the primary corner and oversized widgets fit s
   assert.deepEqual(resolveBounds(undefined, [tiny], tiny), { ...tiny });
 });
 
-function fixture(savedBounds) {
+function fixture(savedBounds, extra = {}) {
   const saved = [];
   const visibility = [];
   const screen = new EventEmitter();
   let areas = [primary, second];
+  const state = { bounds: savedBounds, ...extra, theme: { colors: { page: "#fff" } } };
   screen.getAllDisplays = () => areas.map((workArea) => ({ workArea }));
   screen.getPrimaryDisplay = () => ({ workArea: areas[0] });
   class Window extends EventEmitter {
@@ -77,6 +78,7 @@ function fixture(savedBounds) {
     }
     setAlwaysOnTop() {}
     setBackgroundColor() {}
+    setResizable(value) { this.resizable = value; }
     setMinimumSize(...dimensions) { this.minimumSize = dimensions; }
     setBounds(next) { this.bounds = { ...next }; this.emit("move"); this.emit("resize"); }
     getBounds() { return { ...this.bounds }; }
@@ -88,9 +90,9 @@ function fixture(savedBounds) {
     destroy() { this.dead = true; this.emit("closed"); }
     loadFile() { return Promise.resolve(); }
   }
-  const mini = createMini({ BrowserWindow: Window, screen, preloadPath: "preload.cjs", htmlPath: "mini.html", iconPath: "icon.png", getState: () => ({ bounds: savedBounds, theme: { colors: { page: "#fff" } } }), saveState: (next) => { saved.push(next); }, onVisibility: (shown) => visibility.push(shown) });
+  const mini = createMini({ BrowserWindow: Window, screen, preloadPath: "preload.cjs", htmlPath: "mini.html", iconPath: "icon.png", getState: () => state, saveState: (next) => { saved.push(next); Object.assign(state, next); }, onVisibility: (shown) => visibility.push(shown) });
   mini.show();
-  return { mini, saved, visibility, screen, setAreas: (next) => { areas = next; } };
+  return { mini, saved, state, visibility, screen, setAreas: (next) => { areas = next; } };
 }
 
 test("native move and resize save all bounds, and hiding flushes an unfinished resize", () => {
@@ -156,5 +158,73 @@ test("closing during initial loading cancels the pending show, and reopening pre
   mini.show();
   assert.equal(mini.isVisible(), true);
   assert.equal(mini.window.inactive, true);
+  mini.destroy();
+});
+
+test("micro geometry restores saved bubbles and anchors moved expanded windows", () => {
+  const expanded = { x: 100, y: 120, width: 520, height: 440 };
+  const bubble = { x: 556, y: 120, width: MICRO_SIZE, height: MICRO_SIZE };
+  assert.deepEqual(resolveMicroBounds(null, expanded, [primary], primary), bubble);
+  assert.deepEqual(resolveMicroBounds({ x: 2000, y: 40 }, expanded, [primary, second], primary), { x: 2000, y: 40, width: 64, height: 64 });
+  assert.deepEqual(resolveMicroBounds({ x: 5000, y: 40 }, expanded, [primary], primary), bubble);
+  assert.deepEqual(expandBounds(expanded, bubble, false, [primary], primary), expanded);
+  assert.deepEqual(expandBounds(expanded, { ...bubble, x: 800, y: 200 }, true, [primary], primary), { x: 344, y: 200, width: 520, height: 440 });
+  assert.deepEqual(expandBounds(expanded, { ...bubble, x: 0, y: 1000 }, true, [primary], primary), { x: 0, y: 600, width: 520, height: 440 });
+  assert.deepEqual(expandBounds(expanded, { ...bubble, x: 1920, y: 100 }, true, [primary, second], primary), { x: 1920, y: 100, width: 520, height: 440 });
+});
+
+test("micro movement validates and clamps deltas fully onto the nearest display", () => {
+  const bubble = { x: 100, y: 100, width: 64, height: 64 };
+  assert.deepEqual(moveMicroBounds(bubble, 2000, 0, [primary, second], primary), { ...bubble, x: 2100 });
+  assert.deepEqual(moveMicroBounds(bubble, 1e9, 1e9, [primary], primary), { x: 1856, y: 976, width: 64, height: 64 });
+  for (const value of [NaN, Infinity, "10", null]) assert.throws(() => moveMicroBounds(bubble, value, 0, [primary], primary), /Invalid/);
+});
+
+test("collapse and expand use the same window and keep bubble persistence separate", async () => {
+  const expanded = { x: 100, y: 120, width: 520, height: 440 };
+  const { mini, saved, state } = fixture(expanded);
+  const original = mini.window;
+  assert.throws(() => mini.moveBy(10, 10), /micro mode/);
+  await mini.collapse();
+  assert.equal(mini.window, original);
+  assert.equal(mini.isMicro(), true);
+  assert.equal(mini.window.resizable, false);
+  assert.deepEqual(mini.window.minimumSize, [64, 64]);
+  assert.deepEqual(saved[0], { bounds: expanded });
+  mini.moveBy(100, 50);
+  mini.window.emit("moved");
+  assert.deepEqual(state.bounds, expanded);
+  assert.deepEqual(saved.at(-1), { microBounds: { x: 656, y: 170 } });
+  await mini.expand();
+  assert.equal(mini.window.resizable, true);
+  assert.equal(state.micro, false);
+  assert.deepEqual(mini.window.minimumSize, [MINI_MIN_WIDTH, MINI_MIN_HEIGHT]);
+  assert.deepEqual(state.bounds, { ...expanded, x: 200, y: 170 });
+  mini.destroy();
+});
+
+test("unmoved bubbles restore expanded bounds and repeated transitions serialize", async () => {
+  const expanded = { x: 100, y: 120, width: 520, height: 440 };
+  const { mini, state } = fixture(expanded);
+  await Promise.all([mini.collapse(), mini.expand()]);
+  assert.equal(mini.isMicro(), false);
+  assert.deepEqual(state.bounds, expanded);
+  mini.destroy();
+});
+
+test("startup micro mode and display recovery never overwrite expanded geometry", async () => {
+  const expanded = { x: 2000, y: 40, width: 510, height: 470 };
+  const { mini, state, screen, setAreas } = fixture(expanded, { micro: true, microBounds: { x: 2200, y: 40 } });
+  assert.equal(mini.window.options.resizable, false);
+  assert.equal(mini.isMicro(), true);
+  assert.deepEqual(mini.window.getBounds(), { x: 2200, y: 40, width: 64, height: 64 });
+  setAreas([primary]);
+  screen.emit("display-removed");
+  mini.hide();
+  assert.deepEqual(state.bounds, expanded);
+  assert.equal(mini.window.getBounds().width, 64);
+  assert.ok(isOnScreen(mini.window.getBounds(), [primary], { width: 64, height: 64 }));
+  await mini.expand();
+  assert.ok(isOnScreen(mini.window.getBounds(), [primary], mini.window.getBounds()));
   mini.destroy();
 });

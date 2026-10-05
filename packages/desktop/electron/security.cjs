@@ -98,6 +98,7 @@ function settings(value) {
     "miniOpen",
     "miniLaunchOnStartup",
     "miniOnAiApps",
+    "miniMicro",
     "includeGeminiThoughts",
     "claudeDesktopConnected",
   ])
@@ -106,6 +107,18 @@ function settings(value) {
         throw new Error("Invalid preference");
       result[key] = value[key];
     }
+  if (value.miniHiddenLimits !== undefined) {
+    const ids = value.miniHiddenLimits;
+    if (!Array.isArray(ids) || ids.length > 200 || ids.some(id => typeof id !== "string" || !id || id.length > 300))
+      throw new Error("Invalid mini window limits");
+    result.miniHiddenLimits = [...new Set(ids)];
+  }
+  if (value.miniMicroBounds !== undefined) {
+    const bounds = value.miniMicroBounds;
+    if (!bounds || typeof bounds !== "object" || Array.isArray(bounds) || !Number.isFinite(bounds.x) || !Number.isFinite(bounds.y))
+      throw new Error("Invalid mini bubble position");
+    result.miniMicroBounds = { x: Math.round(bounds.x), y: Math.round(bounds.y) };
+  }
   return result;
 }
 function quoteWindowsArg(value) {

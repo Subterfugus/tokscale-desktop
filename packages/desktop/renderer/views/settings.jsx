@@ -66,6 +66,7 @@ export function SettingsView({ settings, setSettings, info, toCommand, onSaved }
     [error, setError] = useState(""),
     [upstream, setUpstream] = useState(null),
     [miniWatcher, setMiniWatcher] = useState(null),
+    [limits, setLimits] = useState(null),
     [checkingUpstream, setCheckingUpstream] = useState(false);
   const saveQueue = useRef(Promise.resolve()),
     saveSequence = useRef(0),
@@ -83,6 +84,20 @@ export function SettingsView({ settings, setSettings, info, toCommand, onSaved }
     const off = api.onUpstreamStatus(status => { revision++; if (alive) setUpstream(status); });
     return () => { alive = false; off(); };
   }, []);
+  useEffect(() => {
+    let alive = true;
+    api
+      .limitSnapshot()
+      .then((snapshot) => {
+        if (alive)
+          setLimits((snapshot?.sources || []).filter((row) => row.id && Number.isFinite(row.usedPercent)));
+      })
+      .catch(() => alive && setLimits([]));
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const hiddenLimits = Array.isArray(settings.miniHiddenLimits) ? settings.miniHiddenLimits : [];
   const save = async (patch) => {
     const sequence = ++saveSequence.current;
     setError("");
@@ -312,6 +327,36 @@ export function SettingsView({ settings, setSettings, info, toCommand, onSaved }
             ))}
           </Select>
         </Row>
+        <div className="setting-row limit-picker-row">
+          <div>
+            <h3>Limits in the mini window</h3>
+            <p>Unticked limits are left out of the mini window. They still appear on the Limits page and in tray warnings.</p>
+          </div>
+          {!limits ? (
+            <p className="muted">Loading limits…</p>
+          ) : !limits.length ? (
+            <p className="muted">No limits are available yet. Connect an account on the Connections page.</p>
+          ) : (
+            <div className="limit-picker">
+              {limits.map((row) => (
+                <label className="check-label" key={row.id}>
+                  <input
+                    type="checkbox"
+                    checked={!hiddenLimits.includes(row.id)}
+                    onChange={(e) =>
+                      save({
+                        miniHiddenLimits: e.target.checked
+                          ? hiddenLimits.filter((id) => id !== row.id)
+                          : [...hiddenLimits, row.id],
+                      })
+                    }
+                  />
+                  {row.provider} · {row.label}
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
       </Card>
       <Card title="About">
         <Row

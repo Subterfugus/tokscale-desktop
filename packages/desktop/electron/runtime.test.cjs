@@ -115,3 +115,10 @@ test("IPC validates types, NUL, sizes, URLs and absolute home folders", () => {
     { theme: "dark", futurePreference: 3, includeGeminiThoughts: true },
   );
 });
+
+test("micro preferences validate boolean mode and finite bubble coordinates", () => {
+  assert.deepEqual(security.settings({ miniMicro: true, miniMicroBounds: { x: 10.4, y: -20.7, width: 64 } }), { miniMicro: true, miniMicroBounds: { x: 10, y: -21 } });
+  assert.throws(() => security.settings({ miniMicro: "true" }), /Invalid/);
+  for (const miniMicroBounds of [null, { x: NaN, y: 0 }, { x: "1", y: 2 }, { x: 1 }])
+    assert.throws(() => security.settings({ miniMicroBounds }), /Invalid/);
+});

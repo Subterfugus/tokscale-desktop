@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld(
     openExternal: (url) => invoke("openExternal", url),
     showDataFolder: () => invoke("showDataFolder"),
     miniControl: (action) => invoke("miniControl", action),
+    miniMoveBy: (dx, dy) => invoke("miniMoveBy", dx, dy),
     onSettingsChanged: (callback) => subscribe("settingsChanged", callback),
     getSettings: () => invoke("getSettings"),
     saveSettings: (value) => invoke("saveSettings", value),
