@@ -46,6 +46,8 @@ Version 0.4.4 restores dragging by explicitly inheriting the drag-region style o
 
 Version 0.4.5 also opens the widget when T3 Code starts or regains focus, including the installed **T3 Code (Alpha)** desktop app. It uses the same **Show widget when AI apps open** setting and background detector.
 
+Version 0.4.6 adds weekly pace to the widget and a bubble mode. Each weekly limit shows a tick for where usage should be by now and a line such as "On track · 16%/day left · ~93% at reset"; the daily figure counts active hours, so a reset early in the morning does not count as a full day. The shrink button in the widget header collapses it to a small movable bubble; drag the bubble to move it and click it to expand.
+
 ### Original Tokscale repository updates
 
 Version 0.4.2 checks the original `junhoyeo/tokscale` repository at startup and hourly while the app is running, including in the tray. The first successful check establishes a baseline; a later default-branch change produces one Windows notification linking to the GitHub comparison. Multiple commits between checks produce one notice. The latest detected commit is remembered across restarts, so unchanged code does not keep raising notifications.
