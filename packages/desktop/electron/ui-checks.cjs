@@ -519,6 +519,14 @@ async function runUiChecks({ window, mini, output, terminalCount }) {
   await exec(() => document.querySelector('input[aria-label="Keep running in the tray"]').click());
   await wait(async () => (await window.tokscale.getSettings()).minimizeToTray === false);
   checks.push("Background switches save their settings");
+  for (const [label, setting] of [["Open widget on startup", "miniLaunchOnStartup"], ["Show widget when AI apps open", "miniOnAiApps"]]) {
+    assert.equal(await exec(label => document.querySelector(`input[aria-label="${label}"]`).checked, label), true);
+    await exec(label => document.querySelector(`input[aria-label="${label}"]`).click(), label);
+    await wait(async setting => (await window.tokscale.getSettings())[setting] === false, setting);
+    await exec(label => document.querySelector(`input[aria-label="${label}"]`).click(), label);
+    await wait(async setting => (await window.tokscale.getSettings())[setting] === true, setting);
+  }
+  checks.push("Widget startup and AI-app detection preferences default on and save independently");
   assert.equal(await exec(() => document.querySelector('input[aria-label="Upstream update notifications"]').checked), true);
   await click(".setting-control button", "Check now");
   await wait(() => document.querySelector(".settings")?.innerText.includes("Last checked"), null, "Upstream update check did not display its check time");

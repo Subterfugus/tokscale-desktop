@@ -26,7 +26,8 @@ const { createProviderCache } = require("./provider-cache.cjs");
 const { getSessionTitles } = require("./session-titles.cjs");
 const { createPreferences } = require("./preferences.cjs");
 const { resolveTheme } = require("./themes.cjs");
-const { createMini } = require("./mini-window.cjs");
+const { createMini, shouldOpenOnStartup } = require("./mini-window.cjs");
+const { createAppWatcher } = require("./ai-app-watcher.cjs");
 const { createLimitMonitor, tooltip } = require("./limit-monitor.cjs");
 const { createUpstreamMonitor, validateState: validateUpstreamState } = require("./upstream-monitor.cjs");
 const pkg = require("../package.json");
@@ -49,6 +50,7 @@ let window,
   mini,
   monitor,
   upstreamMonitor,
+  appWatcher,
   claudeRequests,
   claudeDisconnecting = false,
   quitting = false,
@@ -72,6 +74,8 @@ let preferences = {
   defaultPeriod: "month",
   includeGeminiThoughts: true,
   upstreamNotifications: true,
+  miniLaunchOnStartup: true,
+  miniOnAiApps: true,
 };
 let pty;
 try {
@@ -94,10 +98,15 @@ function savePreferences(patch) {
     const homeChanged = preferences.home !== values.home;
     const claudeChanged = Boolean(preferences.claudeDesktopConnected) !== Boolean(values.claudeDesktopConnected);
     const upstreamChanged = (preferences.upstreamNotifications !== false) !== (values.upstreamNotifications !== false);
+    const appsChanged = (preferences.miniOnAiApps !== false) !== (values.miniOnAiApps !== false);
     preferences=values; settingsWarning='';
     if (upstreamMonitor && !smoke && upstreamChanged) {
       if (values.upstreamNotifications !== false) upstreamMonitor.start();
       else upstreamMonitor.stop();
+    }
+    if (appWatcher && !smoke && appsChanged) {
+      if (values.miniOnAiApps !== false) appWatcher.start();
+      else appWatcher.stop();
     }
     if (homeChanged) monitor?.invalidate();
     else if (claudeChanged) monitor?.invalidate(source => !/claude|anthropic/i.test(source.provider));
@@ -281,6 +290,7 @@ function terminal(id) {
   return terminals.get(id);
 }
 function wireApi() {
+  handle("miniWatchStatus", () => appWatcher?.snapshot() || null);
   handle("upstreamStatus", () => upstreamMonitor?.snapshot() || null);
   handle("upstreamCheck", () => upstreamMonitor.poll());
   const claudeDesktop = createClaudeDesktop({ env: engineEnv() });
@@ -770,6 +780,7 @@ if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on("second-instance", (_event, argv) => {
     if (!argv.includes("--hidden")) showMain();
+    if (shouldOpenOnStartup(preferences)) mini?.show();
   });
   app
     .whenReady()
@@ -834,6 +845,10 @@ else {
         saveState: ({ bounds }) => void savePreferences({ miniBounds: bounds }).catch(() => {}),
         onVisibility: miniVisibilityChanged,
       });
+      appWatcher = createAppWatcher({
+        onOpen: () => { if (!mini.isVisible()) mini.show(); },
+        onStatus: status => send("miniWatchStatus", status),
+      });
       if (smoke) {
         mini.show();
         await smokeTest();
@@ -853,7 +868,8 @@ else {
       refreshTray();
       monitor.start();
       if (preferences.upstreamNotifications !== false) upstreamMonitor.start();
-      if (preferences.miniOpen) mini.show();
+      if (shouldOpenOnStartup(preferences)) mini.show();
+      if (preferences.miniOnAiApps !== false) appWatcher.start();
     })
     .catch(async (error) => {
       if (smoke) {
@@ -874,6 +890,7 @@ else {
     quitting = true;
     monitor?.stop();
     upstreamMonitor?.stop();
+    appWatcher?.stop();
     for (const notice of upstreamNotices) notice.close();
     upstreamNotices.clear();
     mini?.destroy();

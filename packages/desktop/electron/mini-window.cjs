@@ -7,6 +7,7 @@ const MINI_MIN_HEIGHT = 230;
 const MARGIN = 16;
 
 const finite = (value) => typeof value === "number" && Number.isFinite(value);
+const shouldOpenOnStartup = (settings = {}) => settings.miniLaunchOnStartup !== false;
 
 // Bottom-right corner of a work area, inset by the margin.
 function defaultPosition(workArea, size = { width: MINI_WIDTH, height: MINI_HEIGHT }, margin = MARGIN) {
@@ -75,6 +76,7 @@ function createMini({ BrowserWindow, screen, preloadPath, htmlPath, iconPath, sm
   const htmlUrl = pathToFileURL(htmlPath).href;
   let win = null;
   let destroyed = false;
+  let wantedVisible = false;
   let boundsTimer = null;
   const alive = () => Boolean(win) && !win.isDestroyed();
   const background = () => getState().theme.colors.page;
@@ -147,7 +149,7 @@ function createMini({ BrowserWindow, screen, preloadPath, htmlPath, iconPath, sm
       if (url !== htmlUrl) event.preventDefault();
     });
     win.once("ready-to-show", () => {
-      if (!smoke && alive() && !destroyed) win.show();
+      if (!smoke && alive() && !destroyed && wantedVisible) win.showInactive();
     });
     win.on("move", scheduleBoundsSave);
     win.on("resize", scheduleBoundsSave);
@@ -165,6 +167,7 @@ function createMini({ BrowserWindow, screen, preloadPath, htmlPath, iconPath, sm
     win.on("close", (event) => {
       if (destroyed) return;
       event.preventDefault();
+      wantedVisible = false;
       win.hide();
     });
     win.on("closed", () => {
@@ -178,12 +181,14 @@ function createMini({ BrowserWindow, screen, preloadPath, htmlPath, iconPath, sm
   return {
     show() {
       if (destroyed) return;
+      wantedVisible = true;
       if (!alive()) return create();
       if (smoke) return;
       recoverBounds();
-      win.show();
+      win.showInactive();
     },
     hide() {
+      wantedVisible = false;
       if (alive()) win.hide();
     },
     toggle() {
@@ -201,6 +206,7 @@ function createMini({ BrowserWindow, screen, preloadPath, htmlPath, iconPath, sm
     },
     destroy() {
       destroyed = true;
+      wantedVisible = false;
       persistBounds();
       clearTimeout(boundsTimer);
       if (alive()) win.destroy();
@@ -210,6 +216,7 @@ function createMini({ BrowserWindow, screen, preloadPath, htmlPath, iconPath, sm
 }
 
 module.exports = {
+  shouldOpenOnStartup,
   createMini,
   defaultPosition,
   isOnScreen,

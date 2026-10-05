@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld(
   "tokscale",
   Object.freeze({
     getInfo: () => invoke("getInfo"),
+    miniWatchStatus: () => invoke("miniWatchStatus"),
+    onMiniWatchStatus: callback => subscribe("miniWatchStatus", callback),
     upstreamStatus: () => invoke("upstreamStatus"),
     upstreamCheck: () => invoke("upstreamCheck"),
     onUpstreamStatus: (callback) => subscribe("upstreamStatus", callback),

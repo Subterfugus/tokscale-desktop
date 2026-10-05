@@ -96,6 +96,8 @@ function settings(value) {
     "limitNotifications",
     "upstreamNotifications",
     "miniOpen",
+    "miniLaunchOnStartup",
+    "miniOnAiApps",
     "includeGeminiThoughts",
     "claudeDesktopConnected",
   ])

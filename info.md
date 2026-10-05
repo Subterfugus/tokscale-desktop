@@ -8,7 +8,7 @@ This is a fork of [junhoyeo/tokscale](https://github.com/junhoyeo/tokscale), wit
 
 The user wants an easy desktop experience while retaining Tokscale's original capabilities. Priorities include connecting Claude desktop, Antigravity, and OpenRouter without complicated setup. Claude desktop is the user's intended Claude connection; do not assume they mean only the standalone Claude Code CLI.
 
-The desktop package is currently version `0.4.2` and pins the published Windows Tokscale engine at `4.17.0`. The application is Electron with a React interface, loads bundled files through `file://`, and does not require a local web server. The original interactive terminal is available through xterm and node-pty. Windows portable builds and optional NSIS installers are supported; current builds are unsigned.
+The desktop package is currently version `0.4.3` and pins the published Windows Tokscale engine at `4.17.0`. The application is Electron with a React interface, loads bundled files through `file://`, and does not require a local web server. The original interactive terminal is available through xterm and node-pty. Windows portable builds and optional NSIS installers are supported; current builds are unsigned.
 
 ## Where to edit
 
@@ -147,7 +147,15 @@ The October 4 pending mini-window work is complete:
 
 The 0.4 interface work is committed; the previous note saying it was uncommitted was stale. This patch retains the published engine at 4.17.0. Routine verification uses focused tests and hidden smoke runs; synthetic mini checks include six limits across Claude, Codex and Antigravity without accessing live credentials.
 
-The delivered portable build is `Tokscale-Desktop-0.4.2-x64.exe` on the user's Desktop. Rebuild and package after source changes before replacing and relaunching the delivered executable.
+The delivered portable build is `Tokscale-Desktop-0.4.3-x64.exe` on the user's Desktop. Rebuild and package after source changes before replacing and relaunching the delivered executable.
+
+## Widget startup and AI desktop apps (version 0.4.3)
+
+The user's installation enables **Launch at login**, **Keep running in the tray**, **Open widget on startup**, and **Show widget when AI apps open**. Windows starts the portable Desktop executable with `--hidden`; the main window stays in the tray and the small widget opens. Startup uses `miniLaunchOnStartup` (default true), independently of the temporary `miniOpen` visibility state. Closing the widget therefore does not disable its next startup.
+
+`electron/ai-app-watcher.cjs` runs the packaged `watch-ai-apps.ps1` helper hidden, with no shell interpolation or execution-policy change. Every 1.5 seconds it checks visible desktop process IDs, executable paths, and the foreground window handle. It opens the widget when Codex, Claude, or ChatGPT starts or regains foreground focus. Codex's Store package runs as `ChatGPT.exe`; its `OpenAI.Codex_*` path identifies it. CLI helpers under `bin`, `.codex`, `claude-code`, `node_modules`, or `vendor` are excluded. No chat text, window titles, command lines, or sign-in data are read by this observer.
+
+The widget uses `showInactive()` so it does not interrupt typing. Closing it keeps it hidden until the next supported app activation or launch. `miniOnAiApps` (default true) controls the observer; Settings shows an error if detection fails, and the helper retries after 30 seconds. Quitting Tokscale stops the helper. App detection needs Tokscale to remain running, so tray mode and Windows startup matter. Hidden smoke checks never start the native observer; unit tests cover transitions, lifecycle, failure recovery, framing, and desktop-versus-CLI classification.
 
 ## Original repository update notifications (version 0.4.2)
 

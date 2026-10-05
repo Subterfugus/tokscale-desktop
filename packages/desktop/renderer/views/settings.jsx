@@ -65,11 +65,18 @@ export function SettingsView({ settings, setSettings, info, toCommand, onSaved }
   const [saved, setSaved] = useState(false),
     [error, setError] = useState(""),
     [upstream, setUpstream] = useState(null),
+    [miniWatcher, setMiniWatcher] = useState(null),
     [checkingUpstream, setCheckingUpstream] = useState(false);
   const saveQueue = useRef(Promise.resolve()),
     saveSequence = useRef(0),
     savedTimer = useRef(null);
   useEffect(() => () => clearTimeout(savedTimer.current), []);
+  useEffect(() => {
+    let alive = true, revision = 0;
+    api.miniWatchStatus().then(status => { if (alive && !revision) setMiniWatcher(status); }).catch(() => {});
+    const off = api.onMiniWatchStatus(status => { revision++; if (alive) setMiniWatcher(status); });
+    return () => { alive = false; off(); };
+  }, []);
   useEffect(() => {
     let alive = true, revision = 0;
     api.upstreamStatus().then(status => { if (alive && revision === 0) setUpstream(status); }).catch(() => {});
@@ -263,6 +270,21 @@ export function SettingsView({ settings, setSettings, info, toCommand, onSaved }
         {upstream?.changedAt && <p className="muted">Latest detected change: {upstream.title || upstream.sha?.slice(0, 7)}</p>}
       </Card>
       <Card title="Mini window">
+        <Row title="Show widget when AI apps open" description="Show the widget when you open or switch to Codex, Claude or ChatGPT desktop. Keep Tokscale running in the tray to detect them.">
+          <Switch
+            label="Show widget when AI apps open"
+            checked={settings.miniOnAiApps !== false}
+            onChange={(miniOnAiApps) => save({ miniOnAiApps })}
+          />
+        </Row>
+        {miniWatcher?.error && settings.miniOnAiApps !== false && <Notice tone="error">{miniWatcher.error}</Notice>}
+        <Row title="Open widget on startup" description="Show the widget whenever Tokscale launches. Closing it temporarily keeps this preference on.">
+          <Switch
+            label="Open widget on startup"
+            checked={settings.miniLaunchOnStartup !== false}
+            onChange={(miniLaunchOnStartup) => save({ miniLaunchOnStartup })}
+          />
+        </Row>
         <Row
           title="Show mini window"
           description="A small always-on-top view of today's cost and your limits."

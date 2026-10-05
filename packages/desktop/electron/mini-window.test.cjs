@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
-const { createMini, defaultPosition, isOnScreen, resolvePosition, resolveBounds, MINI_WIDTH, MINI_HEIGHT, MINI_MIN_WIDTH, MINI_MIN_HEIGHT } = require("./mini-window.cjs");
+const { createMini, shouldOpenOnStartup, defaultPosition, isOnScreen, resolvePosition, resolveBounds, MINI_WIDTH, MINI_HEIGHT, MINI_MIN_WIDTH, MINI_MIN_HEIGHT } = require("./mini-window.cjs");
 
 const size = { width: MINI_WIDTH, height: MINI_HEIGHT };
 const primary = { x: 0, y: 0, width: 1920, height: 1040 };
@@ -83,6 +83,7 @@ function fixture(savedBounds) {
     isDestroyed() { return this.dead; }
     isVisible() { return this.visible; }
     show() { this.visible = true; this.emit("show"); }
+    showInactive() { this.show(); this.inactive = true; }
     hide() { this.visible = false; this.emit("hide"); }
     destroy() { this.dead = true; this.emit("closed"); }
     loadFile() { return Promise.resolve(); }
@@ -138,4 +139,22 @@ test("destroy flushes geometry and a recreated controller restores the new size"
   const restored = fixture(original.saved.at(-1).bounds);
   assert.deepEqual(restored.mini.window.getBounds(), { x: 50, y: 60, width: 640, height: 480 });
   restored.mini.destroy();
+});
+
+test("startup defaults on and remains independent of a temporarily closed widget", () => {
+  assert.equal(shouldOpenOnStartup({}), true);
+  assert.equal(shouldOpenOnStartup({ miniOpen: false }), true);
+  assert.equal(shouldOpenOnStartup({ miniOpen: false, miniLaunchOnStartup: true }), true);
+  assert.equal(shouldOpenOnStartup({ miniOpen: true, miniLaunchOnStartup: false }), false);
+});
+
+test("closing during initial loading cancels the pending show, and reopening preserves keyboard focus", () => {
+  const { mini } = fixture();
+  mini.hide();
+  mini.window.emit("ready-to-show");
+  assert.equal(mini.isVisible(), false);
+  mini.show();
+  assert.equal(mini.isVisible(), true);
+  assert.equal(mini.window.inactive, true);
+  mini.destroy();
 });
