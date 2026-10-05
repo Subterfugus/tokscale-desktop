@@ -5,6 +5,8 @@
 const DEFAULT_THRESHOLDS = [75, 90];
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
 const TOOLTIP_LIMIT = 127;
+const { calculatePace } = require("./limit-pace.cjs");
+const { createSampleLog } = require("./limit-history.cjs");
 
 function clampPercent(value) {
   return Math.min(100, Math.max(0, value));
@@ -30,13 +32,16 @@ function normalizeSources(list) {
   return out;
 }
 
-function formatStatus(sources) {
+function formatStatus(sources, paceHints = false) {
   const groups = new Map();
+  const paceById = new Map((Array.isArray(sources) ? sources : []).map(source => [source?.id, source?.pace]));
   for (const source of normalizeSources(sources)) {
     const name = source.provider || "Other";
     if (!groups.has(name)) groups.set(name, []);
     const label = source.label.replace(/\s+usage$/i, "").trim();
-    const text = `${label ? label + " " : ""}${Math.round(source.usedPercent)}%`;
+    const pace = paceHints && paceById.get(source.id);
+    const hint = pace && ["under", "on-track", "over"].includes(pace.status) ? ` - ${pace.status.replace("-", " ")}` : "";
+    const text = `${label ? label + " " : ""}${Math.round(source.usedPercent)}%${hint}`;
     groups.get(name).push(text);
   }
   return [...groups.keys()]
@@ -77,6 +82,7 @@ function createLimitMonitor(options = {}) {
     clearTimer = clearTimeout,
     now = Date.now,
   } = options;
+  const history = options.history || createSampleLog({}, { now });
   const thresholds = (
     Array.isArray(options.thresholds) && options.thresholds.length
       ? options.thresholds.filter((t) => Number.isFinite(t))
@@ -110,8 +116,9 @@ function createLimitMonitor(options = {}) {
   }
 
   function snapshot() {
+    const time = now();
     return {
-      sources: sources.map((s) => ({ ...s })),
+      sources: sources.map((s) => ({ ...s, pace: calculatePace(s, safe(() => history.samples(s.id)) || [], time) })),
       checkedAt,
       error,
       lines: formatStatus(sources),
@@ -152,10 +159,12 @@ function createLimitMonitor(options = {}) {
 
   async function run(myGeneration, myRevision) {
     let list = null;
+    let samples = null;
     let failure = null;
     try {
       const result = await getSources();
       list = normalizeSources(Array.isArray(result) ? result : result?.sources);
+      samples = result?.samples;
       if (!Array.isArray(result) && result?.error) failure = errorMessage(result.error);
     } catch (e) {
       failure = errorMessage(e);
@@ -167,6 +176,12 @@ function createLimitMonitor(options = {}) {
     // account is never mixed silently with freshly checked providers.
     if (list !== null) {
       sources = list;
+      for (const source of list) {
+        if (samples && Array.isArray(samples[source.id])) safe(() => history.merge(source.id, samples[source.id]));
+        safe(() => history.record(source, checkedAt));
+      }
+      const saved = safe(() => history.save?.());
+      if (saved?.catch) saved.catch(() => {});
       evaluate(list);
     }
     const snap = snapshot();
@@ -186,7 +201,11 @@ function createLimitMonitor(options = {}) {
   function invalidate(keep = () => false) {
     revision++;
     inflight = null;
-    sources = sources.filter(keep);
+    sources = sources.filter(source => {
+      if (keep(source)) return true;
+      safe(() => history.remove?.(source.id));
+      return false;
+    });
     checkedAt = null;
     error = null;
     for (const id of memory.keys())

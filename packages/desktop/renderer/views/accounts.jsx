@@ -16,7 +16,7 @@ import {
   ConnectionCards,
   OpenRouterCard,
 } from "../connections.jsx";
-import { brand, compact, dateTime, number, safeMessage } from "../format.js";
+import { brand, compact, dateTime, metricPace, number, safeMessage } from "../format.js";
 
 const DIAGNOSTICS = "usage --light";
 // Quota providers the engine reports that this app does not show. The tray
@@ -87,6 +87,7 @@ export function Limits({ epoch, refresh, toCommand }) {
                       key={j}
                       label={m.label}
                       value={m.used_percent}
+                      pace={metricPace(m)}
                       detail={[
                         m.remaining_label,
                         m.resets_at ? `Resets ${dateTime(m.resets_at)}` : null,

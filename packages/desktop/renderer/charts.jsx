@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Empty } from "./ui.jsx";
-import { pct } from "./format.js";
+import { paceSummary, pct } from "./format.js";
 
 // Categorical slots are assigned in this fixed order and never cycled.
 export const SERIES = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => `var(--series-${n})`);
@@ -261,9 +261,14 @@ export function ShareBar({ items, format, onSelect }) {
   );
 }
 
-export function Meter({ label, value, detail }) {
+export function Meter({ label, value, detail, pace }) {
   const used = Math.max(0, Math.min(100, Number(value) || 0));
   const tone = used >= 90 ? "critical" : used >= 75 ? "warning" : "";
+  const summary = paceSummary(pace),
+    expected =
+      pace && Number.isFinite(Number(pace.expectedPercent))
+        ? Math.max(0, Math.min(100, Number(pace.expectedPercent)))
+        : null;
   return (
     <div className={`meter ${tone}`}>
       <div className="meter-head">
@@ -279,7 +284,16 @@ export function Meter({ label, value, detail }) {
         aria-valuenow={Math.round(used)}
       >
         <i style={{ width: `${used}%` }} />
+        {expected !== null && (
+          <span
+            className="meter-pace-mark"
+            style={{ left: `${expected}%` }}
+            title={`Expected by now: ${Math.round(expected)}%`}
+            aria-hidden="true"
+          />
+        )}
       </div>
+      {summary && <small className={`meter-pace ${pace.status}`}>{summary}</small>}
       {detail && <small>{detail}</small>}
     </div>
   );

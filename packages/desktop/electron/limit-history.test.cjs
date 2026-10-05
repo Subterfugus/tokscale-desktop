@@ -1,0 +1,52 @@
+const { test } = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs/promises");
+const os = require("node:os");
+const path = require("node:path");
+const { createSampleLog, createLimitHistory, MAX_POINTS, MAX_BYTES } = require("./limit-history.cjs");
+const { DAY_MS } = require("./limit-pace.cjs");
+
+test("sample logs merge sorted seeds, skip frequent unchanged polls, and cap retention", () => {
+  let time = 40 * DAY_MS;
+  const log = createSampleLog({}, { now: () => time });
+  const source = { id: "weekly", usedPercent: 40 };
+  log.merge(source.id, [{ t: time - 1000, p: 30 }, { t: time - 2000, p: 20 }, { t: time + 1, p: 90 }]);
+  log.record(source);
+  log.record(source);
+  assert.deepEqual(log.samples(source.id).map(s => s.p), [20, 30, 40]);
+  time += 30 * 60 * 1000;
+  log.record(source);
+  assert.equal(log.samples(source.id).length, 4);
+  log.merge(source.id, Array.from({ length: 3000 }, (_, i) => ({ t: time - 3000 + i, p: 20 })));
+  assert.equal(log.samples(source.id).length, MAX_POINTS);
+  log.merge("old", [{ t: time - 31 * DAY_MS, p: 10 }]);
+  assert.equal(log.samples("old").length, 0);
+  log.merge("recent", [{ t: time - 15 * DAY_MS, p: 10 }, { t: time, p: 20 }]);
+  assert.equal(log.samples("recent").length, 1);
+  time += 31 * DAY_MS;
+  assert.deepEqual(log.snapshot(), {});
+});
+
+test("history safely loads missing/corrupt/oversized files and atomically saves concurrent updates", async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tokscale-history-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const file = path.join(dir, "history.json");
+  const now = () => 100000;
+  const store = createLimitHistory(file, { now });
+  await store.load();
+  await fs.writeFile(file, "broken");
+  await store.load();
+  assert.deepEqual(store.snapshot(), {});
+  await fs.writeFile(file, " ".repeat(MAX_BYTES + 1));
+  await store.load();
+  store.record({ id: "a", usedPercent: 20 });
+  const first = store.save();
+  store.record({ id: "b", usedPercent: 30 });
+  await Promise.all([first, store.save()]);
+  assert.deepEqual((await fs.readdir(dir)), ["history.json"]);
+  const restored = createLimitHistory(file, { now });
+  await restored.load();
+  assert.deepEqual(restored.snapshot(), store.snapshot());
+  const unwritable = createLimitHistory(path.join(file, "child"), { now });
+  await unwritable.save();
+});

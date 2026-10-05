@@ -3,7 +3,7 @@ import { ExternalLink, RefreshCw } from "lucide-react";
 import { api } from "./use-report.js";
 import { Badge, Button, Notice } from "./ui.jsx";
 import { Meter, SERIES, TrendLines } from "./charts.jsx";
-import { dateTime, money } from "./format.js";
+import { dateTime, metricPace, money } from "./format.js";
 
 const timestamp = (value) =>
   Number.isFinite(new Date(value).getTime()) ? dateTime(value) : "unavailable";
@@ -187,6 +187,7 @@ export function ClaudeDesktopCard({ epoch }) {
           label={row.label}
           value={row.used_percent}
           detail={row.resets_at ? `Resets ${timestamp(row.resets_at)}` : undefined}
+          pace={metricPace(row)}
         />
       ))}
       {state?.spend && (
