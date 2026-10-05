@@ -589,25 +589,26 @@ async function runUiChecks({ window, mini, output, terminalCount }) {
       assert.equal(layout.drag, "drag", "Mini background is not draggable");
       assert.ok(layout.buttons.every(value => value === "no-drag"), "A mini button is a drag region");
       assert.equal(layout.scrollRegion, "no-drag", "Mini limits cannot be scrolled interactively");
-      await inMini(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
-      // Hidden windows need an explicit paint after resize before Chromium
-      // sends its new draggable rectangles to the native window.
-      const miniImage = await mini.webContents.capturePage();
-      const hitPoints = await inMini(`[
-        ["header", ".mini-bar strong", 2],
-        ["summary", ".mini-cost strong", 2],
-        ["button icon", ".mini-bar button svg", 1],
-        ["limits label", ".mini-limits-heading strong", 1],
-      ].map(([name, selector, expected]) => {
-        const rect = document.querySelector(selector).getBoundingClientRect();
-        return { name, expected, x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-      })`);
-      // CSS alone previously passed while Windows treated every child as
-      // HTCLIENT (1). Native caption hits (2) are what actually allow dragging.
-      const hits = await nativeHitTest(mini, hitPoints);
-      if (hits) for (const point of hitPoints)
-        assert.equal(hits.find(hit => hit.name === point.name)?.hit, point.expected, `Native widget hit test failed for ${point.name} at ${width}x${height}`);
-      await fs.writeFile(path.join(output, `mini-${width}x${height}.png`), miniImage.toPNG());
+      for (const scroll of ["top", "bottom"]) {
+        await inMini(`document.querySelector('.mini-limits').scrollTop = ${scroll === "top" ? "0" : "document.querySelector('.mini-limits').scrollHeight"}`);
+        await inMini(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+        const miniImage = await mini.webContents.capturePage();
+        const hitPoints = await inMini(`[
+          ["header", ".mini-bar strong", 2],
+          ["summary", ".mini-cost strong", 2],
+          ["button icon", ".mini-bar button svg", 1],
+          ["limits panel", ".mini-limits", 1],
+        ].map(([name, selector, expected]) => {
+          const rect = document.querySelector(selector).getBoundingClientRect();
+          return { name, expected, x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+        })`);
+        // Query the fixed scrollport, since its heading can be offscreen.
+        // Scrolled-out no-drag descendants previously disabled the header.
+        const hits = await nativeHitTest(mini, hitPoints);
+        if (hits) for (const point of hitPoints)
+          assert.equal(hits.find(hit => hit.name === point.name)?.hit, point.expected, `Native widget hit test failed for ${point.name} at ${width}x${height}, scroll ${scroll}`);
+        if (scroll === "bottom") await fs.writeFile(path.join(output, `mini-${width}x${height}.png`), miniImage.toPNG());
+      }
     }
     await wait(async () => {
       const bounds = (await window.tokscale.getSettings()).miniBounds;

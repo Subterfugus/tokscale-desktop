@@ -14,10 +14,8 @@ body,
   -webkit-app-region: drag;
   user-select: none;
 }
-/* Chromium resets app-region on descendants instead of inheriting it.
-   An ordinary child then subtracts its rectangle from its parent's drag area.
-   Explicit inheritance keeps labels draggable and button/scroll descendants
-   inside their parent's no-drag region. */
+/* Keep nested labels draggable and button icons inside their parent's
+   no-drag region. Scrolling descendants are handled separately below. */
 .mini * {
   -webkit-app-region: inherit;
 }
@@ -125,6 +123,13 @@ body,
   border-top: 1px solid var(--line);
   /* Scrolling is an interactive control, including its rows and scrollbar. */
   -webkit-app-region: no-drag;
+}
+/* Exclude the scrollport once. Electron does not clip descendant no-drag
+   rectangles to overflow bounds, so scrolled-out rows can otherwise disable
+   dragging on the header above them. The scrollport still makes every
+   visible row, control and scrollbar interactive. */
+.mini .mini-limits * {
+  -webkit-app-region: initial;
 }
 .mini-limits:focus-visible {
   outline: 2px solid var(--accent);

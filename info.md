@@ -151,7 +151,9 @@ The delivered portable build is `Tokscale-Desktop-0.4.4-x64.exe` on the user's D
 
 ### Dragging regression fixed in version 0.4.4
 
-The bundled Chromium 152 renderer did not inherit `app-region` for ordinary descendants. Their default no-drag rectangles subtracted the labels and summary from the parent drag area. A native `WM_NCHITTEST` query against the installed 0.4.3 widget returned HTCLIENT (1) for those areas, despite its parent CSS saying `drag`. `mini.css` now explicitly inherits `app-region` on descendants, preserving drag on the header and summary and no-drag inside buttons and scrolling limits. Hidden smoke checks use `native-hit-test.cjs` to query Windows at real label/icon locations at both compact and expanded sizes: drag areas must return HTCAPTION (2), and interactive content must return HTCLIENT (1). The probe never moves the pointer or displays a test window. Do not replace this with checks of only the parent computed CSS.
+The installed 0.4.3 widget returned HTCLIENT (1) for its header and summary in a native `WM_NCHITTEST` query, despite its parent CSS saying `drag`. `mini.css` now explicitly inherits `app-region` on ordinary descendants, preserving drag on labels and no-drag inside buttons. The scrolling limits panel contributes one fixed no-drag rectangle; its descendants reset to `initial` (`none`). Electron does not clip descendant drag-region rectangles to the overflow viewport, so inheriting no-drag on scrolling rows allowed hidden rows to disable dragging above the panel. This was reproduced in isolated and full-main-process probes. Do not reintroduce no-drag regions on scroll children.
+
+Hidden smoke checks use `native-hit-test.cjs` to query Windows at real label/icon and fixed scrollport locations, at both compact and expanded sizes, with limits scrolled to the top and bottom. Drag areas must return HTCAPTION (2), and interactive content must return HTCLIENT (1). The probe never moves the pointer or displays a test window. Do not replace this with checks of only the parent computed CSS, or reset scrolling solely to make a native check pass.
 
 ## Widget startup and AI desktop apps (version 0.4.3)
 
