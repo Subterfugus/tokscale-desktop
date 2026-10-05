@@ -44,6 +44,8 @@ Version 0.4.3 adds **Show widget when AI apps open**, enabled by default. While 
 
 Version 0.4.4 restores dragging by explicitly inheriting the drag-region style on ordinary descendants and limiting the scrolling panel's exclusion to its fixed viewport. Drag the header, summary, or background to move it; buttons and the limits panel retain normal interaction even after scrolling. Windows smoke checks verify the native hit-test results at compact and expanded sizes with the limits scrolled to both ends, rather than checking only the parent CSS.
 
+Version 0.4.5 also opens the widget when T3 Code starts or regains focus, including the installed **T3 Code (Alpha)** desktop app. It uses the same **Show widget when AI apps open** setting and background detector.
+
 ### Original Tokscale repository updates
 
 Version 0.4.2 checks the original `junhoyeo/tokscale` repository at startup and hourly while the app is running, including in the tray. The first successful check establishes a baseline; a later default-branch change produces one Windows notification linking to the GitHub comparison. Multiple commits between checks produce one notice. The latest detected commit is remembered across restarts, so unchanged code does not keep raising notifications.

@@ -10,6 +10,7 @@ function desktopApp(record) {
   if (/\\claude\.exe$/.test(exe)) return "Claude";
   if (/\\chatgpt\.exe$/.test(exe)) return /\\openai\.codex_[^\\]+\\/.test(exe) ? "Codex" : "ChatGPT";
   if (/\\codex\.exe$/.test(exe)) return "Codex";
+  if (/\\(?:t3 code(?: \(alpha\))?|t3code)\.exe$/.test(exe)) return "T3 Code";
   return null;
 }
 

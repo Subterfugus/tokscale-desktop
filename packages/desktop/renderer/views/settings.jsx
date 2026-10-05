@@ -270,7 +270,7 @@ export function SettingsView({ settings, setSettings, info, toCommand, onSaved }
         {upstream?.changedAt && <p className="muted">Latest detected change: {upstream.title || upstream.sha?.slice(0, 7)}</p>}
       </Card>
       <Card title="Mini window">
-        <Row title="Show widget when AI apps open" description="Show the widget when you open or switch to Codex, Claude or ChatGPT desktop. Keep Tokscale running in the tray to detect them.">
+        <Row title="Show widget when AI apps open" description="Show the widget when you open or switch to Codex, Claude, ChatGPT or T3 Code desktop. Keep Tokscale running in the tray to detect them.">
           <Switch
             label="Show widget when AI apps open"
             checked={settings.miniOnAiApps !== false}

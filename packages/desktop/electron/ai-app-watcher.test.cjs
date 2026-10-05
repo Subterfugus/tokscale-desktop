@@ -6,6 +6,7 @@ const { createAppWatcher, desktopApp } = require("./ai-app-watcher.cjs");
 const claude = { pid: 101, path: "C:\\Program Files\\WindowsApps\\Claude_2.1_x64__publisher\\app\\Claude.exe", windowId: "1" };
 const codex = { pid: 102, path: "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.9_x64__publisher\\app\\ChatGPT.exe", windowId: "2" };
 const chatgpt = { pid: 103, path: "C:\\Program Files\\WindowsApps\\OpenAI.ChatGPT_1.0_x64__publisher\\app\\ChatGPT.exe", windowId: "3" };
+const t3 = { pid: 104, path: "C:\\Users\\user\\AppData\\Local\\Programs\\t3code\\T3 Code (Alpha).exe", windowId: "4" };
 function fixture() {
   const f = { opened: [], calls: [], timers: [] };
   f.watcher = createAppWatcher({
@@ -25,14 +26,31 @@ function fixture() {
   return f;
 }
 
-test("recognizes Store Codex's ChatGPT executable, Claude and ChatGPT, while excluding CLI helpers", () => {
+test("recognizes desktop Codex, Claude, ChatGPT and T3 Code while excluding CLI and resource helpers", () => {
   assert.equal(desktopApp(claude), "Claude");
   assert.equal(desktopApp(codex), "Codex");
   assert.equal(desktopApp(chatgpt), "ChatGPT");
+  assert.equal(desktopApp(t3), "T3 Code");
+  assert.equal(desktopApp({ ...t3, path: "C:\\Apps\\T3 Code\\T3 Code.exe" }), "T3 Code");
+  assert.equal(desktopApp({ ...t3, path: "C:\\Apps\\t3code\\t3code.exe" }), "T3 Code");
+  assert.equal(desktopApp({ ...t3, path: "C:\\Apps\\t3code\\resources\\resource-monitor\\t3-resource-monitor.exe" }), null);
+  assert.equal(desktopApp({ ...t3, path: "C:\\bin\\t3code.exe" }), null);
   assert.equal(desktopApp({ pid: 1, path: "C:\\Users\\user\\AppData\\Roaming\\Claude\\claude-code\\2.1\\claude.exe" }), null);
   assert.equal(desktopApp({ pid: 1, path: "C:\\Users\\user\\.codex\\packages\\bin\\codex.exe" }), null);
   assert.equal(desktopApp({ pid: 1, path: "C:\\bin\\codex.exe" }), null);
   assert.equal(desktopApp({ pid: 1, path: "C:\\Windows\\notepad.exe" }), null);
+});
+
+test("T3 Code launch and foreground return reopen once per transition", () => {
+  const f = fixture(); f.watcher.start();
+  f.emit([]);
+  f.emit([t3], t3);
+  f.emit([t3], t3);
+  assert.deepEqual(f.opened, [["T3 Code"]]);
+  f.emit([t3]);
+  f.emit([t3], t3);
+  assert.deepEqual(f.opened, [["T3 Code"], ["T3 Code"]]);
+  f.watcher.stop();
 });
 
 test("focus transitions reopen the widget once, including a new window in an existing app", () => {
@@ -68,6 +86,7 @@ test("hidden helper runs without a shell or changing execution policy, and stops
   assert.equal(options.shell, false);
   assert.ok(argv.includes("-EncodedCommand"));
   assert.ok(!argv.includes("-ExecutionPolicy"));
+  assert.match(Buffer.from(argv.at(-1), "base64").toString("utf16le"), /T3 Code \(Alpha\)/);
   const child = f.child;
   f.watcher.stop();
   assert.equal(child.killed, true);

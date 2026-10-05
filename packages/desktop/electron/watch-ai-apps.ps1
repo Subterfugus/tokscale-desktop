@@ -9,9 +9,10 @@ public static class TokscaleForeground {
 }
 '@
 
+$desktopNames = @('Claude', 'ChatGPT', 'Codex', 'T3 Code (Alpha)', 'T3 Code', 't3code')
 function DesktopRecord($appProcess) {
     try {
-        if ($appProcess.ProcessName -notin @('Claude', 'ChatGPT', 'Codex')) { return $null }
+        if ($appProcess.ProcessName -notin $desktopNames) { return $null }
         $exePath = $appProcess.Path
         if (!$exePath) { return $null }
         return @{ pid = $appProcess.Id; name = $appProcess.ProcessName; path = $exePath }
@@ -21,7 +22,7 @@ function DesktopRecord($appProcess) {
 $lastSnapshot = ''
 while ($true) {
     try {
-        $desktopApps = @(Get-Process -Name Claude,ChatGPT,Codex -ErrorAction SilentlyContinue |
+        $desktopApps = @(Get-Process -Name $desktopNames -ErrorAction SilentlyContinue |
             Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero } |
             Sort-Object Id | ForEach-Object { DesktopRecord $_ })
         $foreground = $null
