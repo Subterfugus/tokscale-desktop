@@ -8,7 +8,7 @@ This is a fork of [junhoyeo/tokscale](https://github.com/junhoyeo/tokscale), wit
 
 The user wants an easy desktop experience while retaining Tokscale's original capabilities. Priorities include connecting Claude desktop, Antigravity, and OpenRouter without complicated setup. Claude desktop is the user's intended Claude connection; do not assume they mean only the standalone Claude Code CLI.
 
-The desktop package is currently version `0.4.3` and pins the published Windows Tokscale engine at `4.17.0`. The application is Electron with a React interface, loads bundled files through `file://`, and does not require a local web server. The original interactive terminal is available through xterm and node-pty. Windows portable builds and optional NSIS installers are supported; current builds are unsigned.
+The desktop package is currently version `0.4.4` and pins the published Windows Tokscale engine at `4.17.0`. The application is Electron with a React interface, loads bundled files through `file://`, and does not require a local web server. The original interactive terminal is available through xterm and node-pty. Windows portable builds and optional NSIS installers are supported; current builds are unsigned.
 
 ## Where to edit
 
@@ -147,7 +147,11 @@ The October 4 pending mini-window work is complete:
 
 The 0.4 interface work is committed; the previous note saying it was uncommitted was stale. This patch retains the published engine at 4.17.0. Routine verification uses focused tests and hidden smoke runs; synthetic mini checks include six limits across Claude, Codex and Antigravity without accessing live credentials.
 
-The delivered portable build is `Tokscale-Desktop-0.4.3-x64.exe` on the user's Desktop. Rebuild and package after source changes before replacing and relaunching the delivered executable.
+The delivered portable build is `Tokscale-Desktop-0.4.4-x64.exe` on the user's Desktop. Rebuild and package after source changes before replacing and relaunching the delivered executable.
+
+### Dragging regression fixed in version 0.4.4
+
+The bundled Chromium 152 renderer did not inherit `app-region` for ordinary descendants. Their default no-drag rectangles subtracted the labels and summary from the parent drag area. A native `WM_NCHITTEST` query against the installed 0.4.3 widget returned HTCLIENT (1) for those areas, despite its parent CSS saying `drag`. `mini.css` now explicitly inherits `app-region` on descendants, preserving drag on the header and summary and no-drag inside buttons and scrolling limits. Hidden smoke checks use `native-hit-test.cjs` to query Windows at real label/icon locations at both compact and expanded sizes: drag areas must return HTCAPTION (2), and interactive content must return HTCLIENT (1). The probe never moves the pointer or displays a test window. Do not replace this with checks of only the parent computed CSS.
 
 ## Widget startup and AI desktop apps (version 0.4.3)
 

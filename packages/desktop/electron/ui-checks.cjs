@@ -1,6 +1,7 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const assert = require("node:assert/strict");
+const { nativeHitTest } = require("./native-hit-test.cjs");
 
 // Runs only in --desktop-smoke, against generated local sessions without auth.
 // These exercise the actual bundled React renderer and native bridge.
@@ -589,14 +590,31 @@ async function runUiChecks({ window, mini, output, terminalCount }) {
       assert.ok(layout.buttons.every(value => value === "no-drag"), "A mini button is a drag region");
       assert.equal(layout.scrollRegion, "no-drag", "Mini limits cannot be scrolled interactively");
       await inMini(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
-      await fs.writeFile(path.join(output, `mini-${width}x${height}.png`), (await mini.webContents.capturePage()).toPNG());
+      // Hidden windows need an explicit paint after resize before Chromium
+      // sends its new draggable rectangles to the native window.
+      const miniImage = await mini.webContents.capturePage();
+      const hitPoints = await inMini(`[
+        ["header", ".mini-bar strong", 2],
+        ["summary", ".mini-cost strong", 2],
+        ["button icon", ".mini-bar button svg", 1],
+        ["limits label", ".mini-limits-heading strong", 1],
+      ].map(([name, selector, expected]) => {
+        const rect = document.querySelector(selector).getBoundingClientRect();
+        return { name, expected, x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+      })`);
+      // CSS alone previously passed while Windows treated every child as
+      // HTCLIENT (1). Native caption hits (2) are what actually allow dragging.
+      const hits = await nativeHitTest(mini, hitPoints);
+      if (hits) for (const point of hitPoints)
+        assert.equal(hits.find(hit => hit.name === point.name)?.hit, point.expected, `Native widget hit test failed for ${point.name} at ${width}x${height}`);
+      await fs.writeFile(path.join(output, `mini-${width}x${height}.png`), miniImage.toPNG());
     }
     await wait(async () => {
       const bounds = (await window.tokscale.getSettings()).miniBounds;
       return bounds && Math.abs(bounds.width - 520) <= 2 && Math.abs(bounds.height - 440) <= 2;
     }, null, "Mini window size was not saved");
     mini.setBounds(originalMiniBounds);
-    checks.push("Mini window displays all shared provider limits, resizes and saves bounds, and allows dragging with usable controls");
+    checks.push("Mini window displays all shared provider limits, saves resized bounds, and passes native Windows drag/button/scroll hit tests");
     await exec(() => window.tokscale.saveSettings({ miniTheme: "oled" }));
     await until(`document.documentElement.dataset.theme === "oled"`, "Mini window did not take its own theme");
     assert.equal(await exec(() => document.documentElement.dataset.theme), "dark", "Mini theme changed the main window");

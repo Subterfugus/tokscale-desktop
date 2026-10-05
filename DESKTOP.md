@@ -42,6 +42,8 @@ The mini window is a resizable always-on-top window with today's estimated cost,
 
 Version 0.4.3 adds **Show widget when AI apps open**, enabled by default. While Tokscale runs, the widget appears when Codex, Claude, or ChatGPT desktop starts or regains focus, without taking keyboard focus away. A hidden Windows helper checks process and foreground-window metadata every 1.5 seconds; it does not inspect chats or credentials. Codex's Store package is recognized even though its executable is named ChatGPT.exe, and CLI helpers are excluded. Enable **Keep running in the tray** and **Launch at login** to make this available after closing the main window and after Windows sign-in. Closing the widget hides it until the next supported app activation; turning off the setting stops detection.
 
+Version 0.4.4 restores dragging by explicitly inheriting the drag-region style on the widget's descendants. Drag the header, summary, or background to move it; buttons and the limits panel retain normal interaction. Windows smoke checks verify the native hit-test results at actual label and icon locations, rather than checking only the parent CSS.
+
 ### Original Tokscale repository updates
 
 Version 0.4.2 checks the original `junhoyeo/tokscale` repository at startup and hourly while the app is running, including in the tray. The first successful check establishes a baseline; a later default-branch change produces one Windows notification linking to the GitHub comparison. Multiple commits between checks produce one notice. The latest detected commit is remembered across restarts, so unchanged code does not keep raising notifications.
