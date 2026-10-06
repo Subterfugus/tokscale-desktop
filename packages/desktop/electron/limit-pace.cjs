@@ -2,20 +2,13 @@
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
-const WINDOW_MS = 7 * DAY_MS;
 const UNDER_THRESHOLD = 80;
 const OVER_THRESHOLD = 100;
 const MIN_DAYS = 0.05;
 
-function cleanSamples(samples) {
-  return (Array.isArray(samples) ? samples : [])
-    .filter(s => Number.isFinite(s?.t) && Number.isFinite(s?.p) && s.p >= 0 && s.p <= 100)
-    .slice().sort((a, b) => a.t - b.t);
-}
-
 // Straight-line pace over the 7 days before the reset. Days are fractions of
 // 24 hours, so a 5am reset counts its last morning as 5/24 of a day.
-function calculatePace(source, _samples, now = Date.now()) {
+function calculatePace(source, now = Date.now()) {
   if (!/weekly|seven[- ]?day|7[- ]?day/i.test(source?.label || "")) return null;
   if (source.resetsAt == null || source.resetsAt === "") return null;
   const reset = new Date(source.resetsAt).getTime();
@@ -39,4 +32,4 @@ function calculatePace(source, _samples, now = Date.now()) {
   return { status, expectedPercent, projectedPercent, dailyBudgetPercent, daysLeft: left, runsOutAt };
 }
 
-module.exports = { calculatePace, UNDER_THRESHOLD, OVER_THRESHOLD, MIN_DAYS, HOUR_MS, DAY_MS, WINDOW_MS, cleanSamples };
+module.exports = { calculatePace, UNDER_THRESHOLD, OVER_THRESHOLD, MIN_DAYS, HOUR_MS, DAY_MS };

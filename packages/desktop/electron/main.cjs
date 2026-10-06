@@ -29,7 +29,6 @@ const { resolveTheme } = require("./themes.cjs");
 const { createMini, shouldOpenOnStartup } = require("./mini-window.cjs");
 const { createAppWatcher } = require("./ai-app-watcher.cjs");
 const { createLimitMonitor, formatStatus, tooltip } = require("./limit-monitor.cjs");
-const { createLimitHistory } = require("./limit-history.cjs");
 const { createUpstreamMonitor, validateState: validateUpstreamState } = require("./upstream-monitor.cjs");
 const pkg = require("../package.json");
 const enginePath = app.isPackaged
@@ -184,7 +183,6 @@ function refreshTray() {
 // own quota report; the desktop reading wins when both describe Claude.
 async function limitSources() {
   const sources = [];
-  const samples = {};
   // Several accounts can share a provider; the account keeps their ids apart.
   const add = (provider, metrics, account = "") => {
     for (const metric of Array.isArray(metrics) ? metrics : [])
@@ -201,8 +199,6 @@ async function limitSources() {
   if (preferences.claudeDesktopConnected && !claudeDisconnecting)
     await claudeRequests.refresh({}).then((result) => {
       add("Claude", result.metrics);
-      for (const source of sources.filter(source => source.provider === "Claude" && /^Weekly usage$/i.test(source.label)))
-        samples[source.id] = (Array.isArray(result.samples) ? result.samples : []).map(sample => ({ t: sample.timestamp, p: sample.sevenDay }));
       desktopClaude = sources.some(source => source.provider === "Claude" && Number.isFinite(source.usedPercent));
     }, (error) => failures.push(error));
   await run(["usage", "--json"]).then((result) => {
@@ -216,7 +212,7 @@ async function limitSources() {
     }
   }).catch((error) => failures.push(error));
   if (!sources.length && failures.length) throw failures[0];
-  return { sources, samples, error: failures.length ? "Some usage limits could not be refreshed" : null };
+  return { sources, error: failures.length ? "Some usage limits could not be refreshed" : null };
 }
 // Native window buttons, menus and form popups follow the app's appearance.
 const chrome = () => {
@@ -831,10 +827,9 @@ else {
       });
       // Both windows and the tray read one monitor, including the first mini
       // render. Synthetic checks never access live account credentials.
-      const limitHistory = createLimitHistory(path.join(app.getPath("userData"), "limit-history.json"));
-      await limitHistory.load();
+      // Earlier versions kept a usage sample log here; nothing reads it now.
+      void fs.rm(path.join(app.getPath("userData"), "limit-history.json"), { force: true }).catch(() => {});
       monitor = createLimitMonitor({
-        history: limitHistory,
         getSources: smoke ? async () => [
           { id: "claude:5-hour", provider: "Claude", label: "5-hour usage", usedPercent: 25, resetsAt: null },
           { id: "claude:weekly", provider: "Claude", label: "Weekly usage", usedPercent: 40, resetsAt: null },

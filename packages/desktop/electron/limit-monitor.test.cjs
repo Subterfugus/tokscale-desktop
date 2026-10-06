@@ -1,7 +1,6 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { createLimitMonitor, formatStatus, tooltip } = require("./limit-monitor.cjs");
-const { createSampleLog } = require("./limit-history.cjs");
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -401,16 +400,14 @@ test("tooltip joins lines and truncates at exactly 127 characters", () => {
   assert.equal(over, ("App\n" + exact + "y").slice(0, 126) + "…");
 });
 
-test("monitor merges desktop history, owns pace, and recomputes cached snapshots", async () => {
+test("monitor owns pace and recomputes cached snapshots", async () => {
   let time = new Date(2026, 9, 4, 8).getTime();
-  const history = createSampleLog({}, { now: () => time });
   const weekly = src(40, { id: "weekly", label: "Weekly usage", resetsAt: new Date(2026, 9, 8, 8).getTime(), pace: { status: "forged" } });
   const monitor = createLimitMonitor({
-    now: () => time, history,
-    getSources: () => ({ sources: [weekly, src(10)], samples: { weekly: [{ t: time - 86400000, p: 30 }] } }),
+    now: () => time,
+    getSources: () => ({ sources: [weekly, src(10)] }),
   });
   const first = await monitor.poll();
-  assert.equal(history.samples("weekly").length, 2);
   assert.notEqual(first.sources[0].pace.status, "forged");
   assert.equal(first.sources[1].pace, null);
   time += 86400000;
@@ -421,22 +418,4 @@ test("monitor merges desktop history, owns pace, and recomputes cached snapshots
   assert.match(formatStatus(second.sources, true)[0], /Weekly 40% - /);
   monitor.invalidate();
   assert.deepEqual(monitor.snapshot().sources, []);
-  assert.equal(history.samples("weekly").length, 0);
-});
-
-test("late invalidated polls never write history and history failures cannot break polling", async () => {
-  let release;
-  let records = 0;
-  const monitor = createLimitMonitor({ getSources: () => new Promise(resolve => { release = resolve; }), history: {
-    record() { records++; }, samples() { return []; },
-  } });
-  const poll = monitor.poll();
-  monitor.invalidate();
-  release([src(20)]);
-  await poll;
-  assert.equal(records, 0);
-  const broken = createLimitMonitor({ getSources: () => [src(20)], history: {
-    record() { throw new Error("disk"); }, samples() { throw new Error("disk"); }, save() { return Promise.reject(new Error("disk")); },
-  } });
-  assert.equal((await broken.poll()).sources[0].pace, null);
 });

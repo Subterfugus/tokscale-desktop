@@ -79,17 +79,19 @@ test("micro IPC and main saves expose mode to both renderers while protecting ow
   assert.throws(() => invoke(widget, "miniMoveBy", 1, 1), /micro mode/);
 });
 
-test("Claude desktop weekly samples are mapped to the monitor source id", async () => {
-  const { api } = harness();
-  await api.savePreferences({ claudeDesktopConnected: true });
-  api.setClaude({ refresh: async () => ({
-    metrics: [{ label: "Weekly usage", used_percent: 40, resets_at: "2026-10-08T08:00:00Z" }],
-    samples: [{ timestamp: 1000, fiveHour: 90, sevenDay: 30 }],
-  }) });
-  const result = await api.limitSources();
-  assert.equal(result.sources[0].id, "claude::weekly usage");
-  assert.equal(result.samples[result.sources[0].id][0].p, 30);
-  assert.equal(result.samples[result.sources[0].id][0].t, 1000);
+test("closing the mini window hides it without touching its setting; only the setting turns it off and on", async () => {
+  const { main, widget, invoke, shown } = harness();
+  await invoke(widget, "miniControl", "close");
+  assert.deepEqual(shown, [false]);
+  assert.notEqual(invoke(main, "getSettings").miniEnabled, false);
+  assert.throws(() => invoke(main, "miniControl", "toggle"), /Invalid mini window action/);
+  await invoke(main, "saveSettings", { miniEnabled: false });
+  assert.deepEqual(shown, [false, false]);
+  await invoke(main, "saveSettings", { theme: "light" });
+  assert.deepEqual(shown, [false, false]);
+  await invoke(main, "saveSettings", { miniEnabled: true });
+  assert.deepEqual(shown, [false, false, true]);
+  assert.throws(() => invoke(widget, "saveSettings", { miniEnabled: false }), /Untrusted/);
 });
 
 test("preload exposes mini movement on the existing invoke channel", () => {
