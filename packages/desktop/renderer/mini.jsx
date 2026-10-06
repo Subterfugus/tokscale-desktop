@@ -4,6 +4,8 @@ import { ArrowDownCircle, Loader2, Maximize2, Minimize2, X } from "lucide-react"
 import "./styles.css";
 import "./mini.css";
 import { Meter } from "./charts.jsx";
+import { BubbleArt } from "./bubbles.jsx";
+import options from "../electron/mini-options.cjs";
 import { clock, compact, dateTime, money, number, safeMessage, updateLabel } from "./format.js";
 import { modelTokenTotal } from "./report-data.js";
 import { cssVariable, resolveTheme } from "./themes.js";
@@ -63,11 +65,11 @@ async function loadToday(home) {
 // How long the widget's contents take to fade before the window shrinks.
 const LEAVE_MS = 110;
 
-// 64x64 bubble in the widget's own theme. Purely decorative: a small balance
-// scale that tips when touched, no usage data. The whole window is one no-drag
+// 64x64 bubble in the widget's own theme. Purely decorative: the design picked
+// in Settings, which moves a little when touched, no usage data. The whole window is one no-drag
 // button; dragging is done by moving the window from pointer deltas so clicks
 // are never swallowed.
-function Bubble() {
+function Bubble({ design }) {
   const drag = useRef(null),
     frame = useRef(0),
     [dragging, setDragging] = useState(false),
@@ -132,21 +134,7 @@ function Bubble() {
         }
       }}
     >
-      <svg viewBox="0 0 64 64" aria-hidden="true">
-        <path className="mini-bubble-stand" d="M32 17v30M23 48h18" />
-        <g className="mini-bubble-beam">
-          <path className="mini-bubble-stand" d="M15 22h34" />
-          <g className="mini-bubble-pan left">
-            <path className="mini-bubble-string" d="M15 22l-6.5 12m6.5-12l6.5 12" />
-            <path className="mini-bubble-dish" d="M7.5 34h15a7.5 7.5 0 0 1-15 0z" />
-          </g>
-          <g className="mini-bubble-pan right">
-            <path className="mini-bubble-string" d="M49 22l-6.5 12m6.5-12l6.5 12" />
-            <path className="mini-bubble-dish" d="M41.5 34h15a7.5 7.5 0 0 1-15 0z" />
-          </g>
-        </g>
-        <circle className="mini-bubble-pivot" cx="32" cy="22" r="3" />
-      </svg>
+      <BubbleArt id={design} />
     </button>
   );
 }
@@ -246,16 +234,31 @@ function Mini() {
     };
   }, [ready, visible, settings.home, settings.claudeDesktopConnected]);
   const hidden = Array.isArray(settings.miniHiddenLimits) ? settings.miniHiddenLimits : [];
-  const shown = (limits?.sources || []).filter(
+  const shown = options.orderLimits(limits?.sources, settings.miniLimitOrder).filter(
     (row) => Number.isFinite(row.usedPercent) && !hidden.includes(row.id),
   );
+  // A see-through window turns solid while the pointer is over it.
+  const faded = options.opacityPercent(settings.miniOpacity) < 100;
+  useEffect(() => {
+    if (!faded) return;
+    const root = document.documentElement;
+    const tell = (action) => () => { try { api.miniControl(action)?.catch?.(() => {}); } catch {} };
+    const enter = tell("solid"), leave = tell("faded");
+    root.addEventListener("mouseenter", enter);
+    root.addEventListener("mouseleave", leave);
+    return () => {
+      root.removeEventListener("mouseenter", enter);
+      root.removeEventListener("mouseleave", leave);
+      leave();
+    };
+  }, [faded]);
   const micro = settings.miniMicro === true;
   useEffect(() => {
     document.documentElement.classList.toggle("mini-micro", micro);
     setLeaving(false);
     return () => document.documentElement.classList.remove("mini-micro");
   }, [micro]);
-  if (micro) return <Bubble />;
+  if (micro) return <Bubble design={settings.miniBubble} />;
   // Fade the contents first so the window shrinks as an empty panel.
   const shrink = () => {
     if (leaving) return;

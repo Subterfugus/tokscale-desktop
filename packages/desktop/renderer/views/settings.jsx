@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Check, FolderOpen, TerminalSquare } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, FolderOpen, GripVertical, TerminalSquare } from "lucide-react";
+import { BUBBLES, BubbleArt, bubbleId } from "../bubbles.jsx";
+import miniOptions from "../../electron/mini-options.cjs";
 import { api } from "../use-report.js";
 import { Button, Card, Notice, Select } from "../ui.jsx";
 import { THEMES, resolveTheme } from "../themes.js";
@@ -106,6 +108,10 @@ export function SettingsView({ settings, setSettings, info, toCommand, onSaved }
     };
   }, []);
   const hiddenLimits = Array.isArray(settings.miniHiddenLimits) ? settings.miniHiddenLimits : [];
+  const orderedLimits = miniOptions.orderLimits(limits, settings.miniLimitOrder);
+  const [dragLimit, setDragLimit] = useState(null), [dropLimit, setDropLimit] = useState(null);
+  const moveLimit = (from, to) => save({ miniLimitOrder: miniOptions.moveLimit(limits, settings.miniLimitOrder, from, to) });
+  const opacity = miniOptions.opacityPercent(settings.miniOpacity);
   const save = async (patch) => {
     const sequence = ++saveSequence.current;
     setError("");
@@ -363,34 +369,104 @@ export function SettingsView({ settings, setSettings, info, toCommand, onSaved }
             ))}
           </Select>
         </Row>
+        <Row
+          title="Mini window opacity"
+          description="How solid the mini window and its bubble look while the pointer is elsewhere. They turn fully solid when you point at them."
+        >
+          <div className="range-control">
+            <input
+              type="range"
+              aria-label="Mini window opacity"
+              min={miniOptions.MIN_OPACITY}
+              max={100}
+              step={5}
+              value={opacity}
+              onChange={(e) => save({ miniOpacity: Number(e.target.value) })}
+            />
+            <output>{opacity}%</output>
+          </div>
+        </Row>
+        <div className="setting-row bubble-row">
+          <div>
+            <h3>Bubble</h3>
+            <p>What the mini window shows when it is shrunk to its bubble. Point at one to see it move.</p>
+          </div>
+          <div className="bubble-grid" role="group" aria-label="Bubble">
+            {BUBBLES.map((bubble) => (
+              <button
+                type="button"
+                key={bubble.id}
+                className="bubble-choice"
+                aria-pressed={bubbleId(settings.miniBubble) === bubble.id}
+                onClick={() => save({ miniBubble: bubble.id })}
+              >
+                <span><BubbleArt id={bubble.id} /></span>
+                <span>{bubble.name}</span>
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="setting-row limit-picker-row">
           <div>
             <h3>Limits in the mini window</h3>
-            <p>Unticked limits are left out of the mini window. They still appear on the Limits page and in tray warnings.</p>
+            <p>Drag a limit, or use its arrows, to set the order the mini window lists them in. Unticked limits are left out of the mini window; they still appear on the Limits page and in tray warnings.</p>
           </div>
           {!limits ? (
             <p className="muted">Loading limits…</p>
           ) : !limits.length ? (
             <p className="muted">No limits are available yet. Connect an account on the Connections page.</p>
           ) : (
-            <div className="limit-picker">
-              {limits.map((row) => (
-                <label className="check-label" key={row.id}>
-                  <input
-                    type="checkbox"
-                    checked={!hiddenLimits.includes(row.id)}
-                    onChange={(e) =>
-                      save({
-                        miniHiddenLimits: e.target.checked
-                          ? hiddenLimits.filter((id) => id !== row.id)
-                          : [...hiddenLimits, row.id],
-                      })
-                    }
-                  />
-                  {row.provider} · {row.label}
-                </label>
+            <ol className="limit-order">
+              {orderedLimits.map((row, index) => (
+                <li
+                  key={row.id}
+                  className={`${dragLimit === index ? "dragging" : ""}${dropLimit === index && dragLimit !== index ? " drop-target" : ""}`}
+                  draggable
+                  onDragStart={(e) => {
+                    e.dataTransfer.effectAllowed = "move";
+                    e.dataTransfer.setData("text/plain", row.id);
+                    setDragLimit(index);
+                  }}
+                  onDragOver={(e) => {
+                    if (dragLimit === null) return;
+                    e.preventDefault();
+                    setDropLimit(index);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (dragLimit !== null && dragLimit !== index) moveLimit(dragLimit, index);
+                    setDragLimit(null);
+                    setDropLimit(null);
+                  }}
+                  onDragEnd={() => {
+                    setDragLimit(null);
+                    setDropLimit(null);
+                  }}
+                >
+                  <span className="grip" aria-hidden="true"><GripVertical size={14} /></span>
+                  <label className="check-label">
+                    <input
+                      type="checkbox"
+                      checked={!hiddenLimits.includes(row.id)}
+                      onChange={(e) =>
+                        save({
+                          miniHiddenLimits: e.target.checked
+                            ? hiddenLimits.filter((id) => id !== row.id)
+                            : [...hiddenLimits, row.id],
+                        })
+                      }
+                    />
+                    {row.provider} · {row.label}
+                  </label>
+                  <button type="button" className="icon-button" disabled={index === 0} aria-label={`Move ${row.provider} ${row.label} up`} title="Move up" onClick={() => moveLimit(index, index - 1)}>
+                    <ChevronUp size={14} />
+                  </button>
+                  <button type="button" className="icon-button" disabled={index === orderedLimits.length - 1} aria-label={`Move ${row.provider} ${row.label} down`} title="Move down" onClick={() => moveLimit(index, index + 1)}>
+                    <ChevronDown size={14} />
+                  </button>
+                </li>
               ))}
-            </div>
+            </ol>
           )}
         </div>
       </Card>

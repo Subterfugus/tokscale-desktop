@@ -126,7 +126,7 @@ function savePreferences(patch) {
     if (homeChanged) monitor?.invalidate();
     else if (claudeChanged) monitor?.invalidate(source => !/claude|anthropic/i.test(source.provider));
     // The save itself succeeded; a failing side effect must not report otherwise.
-    for (const effect of [applyTheme, applyLoginItem, () => mini?.applyTheme(), refreshTray])
+    for (const effect of [applyTheme, applyLoginItem, () => mini?.applyTheme(), () => mini?.applyOpacity?.(), refreshTray])
       try { effect(); } catch (error) { console.error(error.message); }
     for (const target of [window, mini?.window])
       if (target && !target.isDestroyed()) target.webContents.send("tokscale:settingsChanged", values);
@@ -699,6 +699,8 @@ function wireApi() {
       if (mini && !mini.isMicro?.()) return Promise.resolve(mini.collapse()).then(() => undefined);
     }
     else if (action === "close") setMiniVisible(false);
+    // The pointer entering or leaving the mini window; it is solid while inside.
+    else if (action === "solid" || action === "faded") mini?.setHover?.(action === "solid");
     else if (action === "micro") return mini?.collapse();
     else if (action === "expand") return mini?.expand();
     // The widget never supplies a link or a file; main decides both.
@@ -970,7 +972,7 @@ else {
         iconPath,
         smoke,
         animationMs: smoke ? 0 : 190,
-        getState: () => ({ bounds: preferences.miniBounds, micro: preferences.miniMicro, microBounds: preferences.miniMicroBounds, theme: miniTheme() }),
+        getState: () => ({ bounds: preferences.miniBounds, micro: preferences.miniMicro, microBounds: preferences.miniMicroBounds, theme: miniTheme(), opacity: preferences.miniOpacity }),
         saveState: ({ bounds, micro, microBounds }) => savePreferences({
           ...(bounds ? { miniBounds: bounds } : {}),
           ...(micro !== undefined ? { miniMicro: micro } : {}),

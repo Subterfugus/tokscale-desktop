@@ -536,6 +536,14 @@ async function runUiChecks({ window, mini, output, terminalCount }) {
   assert.equal(appUpdate.error, null);
   await wait(() => document.querySelector(".page-header .update-ready")?.getAttribute("aria-label")?.includes("999.0.0"), null, "The main window did not show the update icon");
   checks.push("App update check offers a newer desktop release with a download link and ignores engine tags");
+  await exec(() => document.querySelector(".bubble-grid").scrollIntoView({ block: "center" }));
+  assert.equal(await exec(() => document.querySelectorAll(".bubble-choice").length), 8);
+  await click(".bubble-choice", "Heart");
+  await wait(async () => (await window.tokscale.getSettings()).miniBubble === "heart");
+  assert.equal(await exec(() => document.querySelector(".bubble-choice[aria-pressed=true]").innerText.trim()), "Heart");
+  await snapshot("settings-mini");
+  await exec(() => window.tokscale.saveSettings({ miniBubble: "scale" }));
+  checks.push("Settings offers eight bubble designs and saves the chosen one");
   assert.equal(await exec(() => document.querySelector('input[aria-label="Upstream update notifications"]').checked), true);
   await click(".setting-control button", "Check now");
   await wait(() => document.querySelector(".settings")?.innerText.includes("Last checked"), null, "Upstream update check did not display its check time");
@@ -645,6 +653,10 @@ async function runUiChecks({ window, mini, output, terminalCount }) {
     await exec(() => window.tokscale.saveSettings({ miniHiddenLimits: [] }));
     await until(`document.querySelectorAll(".mini-limit").length === 6`, "Mini window did not restore a hidden limit");
     checks.push("Mini window leaves out limits hidden in Settings and restores them");
+    await exec(() => window.tokscale.saveSettings({ miniLimitOrder: ["antigravity:flash", "codex:weekly"] }));
+    await until(`[...document.querySelectorAll(".mini-limit")].slice(0, 2).map(row => row.textContent).join("|").replace(/\\s+/g, " ").match(/Antigravity · Flash.*\\|Codex · Weekly/) !== null`, "Mini window did not follow the saved limit order");
+    await exec(() => window.tokscale.saveSettings({ miniLimitOrder: [] }));
+    checks.push("Mini window lists limits in the order saved in Settings");
     const expandedBounds = mini.getBounds();
     await inMini(`window.tokscale.miniControl("micro")`);
     assert.equal(mini.isResizable(), false);

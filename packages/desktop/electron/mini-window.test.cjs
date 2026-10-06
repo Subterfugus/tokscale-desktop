@@ -78,6 +78,7 @@ function fixture(savedBounds, extra = {}) {
     }
     setAlwaysOnTop() {}
     setBackgroundColor() {}
+    setOpacity(value) { this.opacity = value; }
     setResizable(value) { this.resizable = value; }
     setMinimumSize(...dimensions) { this.minimumSize = dimensions; }
     setBounds(next) { this.bounds = { ...next }; this.emit("move"); this.emit("resize"); }
@@ -94,6 +95,21 @@ function fixture(savedBounds, extra = {}) {
   mini.show();
   return { mini, saved, state, visibility, screen, setAreas: (next) => { areas = next; } };
 }
+
+test("the window is see-through at the saved opacity and solid under the pointer", () => {
+  const { mini, state } = fixture(undefined, { opacity: 60 });
+  assert.equal(mini.window.opacity, 0.6);
+  mini.setHover(true);
+  assert.equal(mini.window.opacity, 1);
+  mini.setHover(false);
+  state.opacity = 20;
+  mini.applyOpacity();
+  assert.equal(mini.window.opacity, 0.3);
+  mini.setHover(true);
+  mini.hide();
+  assert.equal(mini.window.opacity, 0.3);
+  assert.equal(fixture().mini.window.opacity, 1);
+});
 
 test("native move and resize save all bounds, and hiding flushes an unfinished resize", () => {
   const { mini, saved, visibility } = fixture();

@@ -1688,6 +1688,133 @@ tbody tr:last-child td {
 .setting-control code.path {
   max-width: 220px;
 }
+/* Bubble art: drawn in the accent colour on the page colour. Each moving part
+   rests untransformed and eases to its hover or drag pose, so nothing loops
+   and nothing jumps. Used by the mini window's bubble and the Settings picker. */
+.bubble-art {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.bubble-line,
+.bubble-thread,
+.bubble-soft-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.bubble-thread {
+  stroke-width: 1.5;
+  opacity: 0.6;
+}
+.bubble-soft-line { opacity: 0.55; }
+.bubble-fill { fill: var(--accent); }
+.bubble-soft {
+  fill: var(--accent);
+  opacity: 0.5;
+}
+.bubble-round {
+  stroke: var(--accent);
+  stroke-width: 4;
+  stroke-linejoin: round;
+}
+.bubble-part {
+  transform-origin: var(--origin);
+  transition: transform 700ms cubic-bezier(0.3, 1.5, 0.5, 1);
+}
+.mini-bubble:hover .bubble-part,
+.bubble-choice:hover .bubble-part { transform: var(--hover); }
+.mini-bubble.dragging .bubble-part { transform: var(--drag); }
+@media (prefers-reduced-motion: reduce) {
+  .bubble-part { transition: none; }
+}
+.setting-row.bubble-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+.bubble-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+  gap: 10px;
+}
+.bubble-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: none;
+  color: var(--text-2);
+  font-size: 12px;
+}
+.bubble-choice > span:first-child {
+  width: 56px;
+  height: 56px;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--page);
+}
+.bubble-choice:hover { border-color: var(--line-strong); }
+.bubble-choice[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.range-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.range-control input {
+  width: 160px;
+  accent-color: var(--accent);
+}
+.range-control output {
+  min-width: 40px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.limit-order {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.limit-order li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 4px 0 2px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+}
+.limit-order li:hover { background: var(--surface-2); }
+.limit-order li.dragging { opacity: 0.45; }
+.limit-order li.drop-target { border-color: var(--accent); }
+.limit-order .grip {
+  display: grid;
+  place-items: center;
+  color: var(--text-3);
+  cursor: grab;
+}
+.limit-order .check-label {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+}
+.limit-order .icon-button {
+  width: 24px;
+  height: 24px;
+}
+.limit-order .icon-button:disabled { opacity: 0.3; }
 .setting-row.limit-picker-row {
   flex-direction: column;
   align-items: stretch;

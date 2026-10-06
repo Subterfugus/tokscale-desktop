@@ -1,5 +1,6 @@
 const path = require("node:path");
 const { THEMES } = require("./themes.cjs");
+const { BUBBLES, MIN_OPACITY } = require("./mini-options.cjs");
 function args(value) {
   if (
     !Array.isArray(value) ||
@@ -113,6 +114,21 @@ function settings(value) {
     if (!Array.isArray(ids) || ids.length > 200 || ids.some(id => typeof id !== "string" || !id || id.length > 300))
       throw new Error("Invalid mini window limits");
     result.miniHiddenLimits = [...new Set(ids)];
+  }
+  if (value.miniLimitOrder !== undefined) {
+    const ids = value.miniLimitOrder;
+    if (!Array.isArray(ids) || ids.length > 200 || ids.some(id => typeof id !== "string" || !id || id.length > 300))
+      throw new Error("Invalid mini window limit order");
+    result.miniLimitOrder = [...new Set(ids)];
+  }
+  if (value.miniBubble !== undefined) {
+    if (!BUBBLES.some(bubble => bubble.id === value.miniBubble)) throw new Error("Unknown mini window bubble");
+    result.miniBubble = value.miniBubble;
+  }
+  if (value.miniOpacity !== undefined) {
+    if (!Number.isInteger(value.miniOpacity) || value.miniOpacity < MIN_OPACITY || value.miniOpacity > 100)
+      throw new Error("Invalid mini window opacity");
+    result.miniOpacity = value.miniOpacity;
   }
   if (value.miniMicroBounds !== undefined) {
     const bounds = value.miniMicroBounds;

@@ -1,4 +1,5 @@
 const { pathToFileURL } = require("node:url");
+const { opacityPercent } = require("./mini-options.cjs");
 
 const MINI_WIDTH = 300;
 const MINI_HEIGHT = 230;
@@ -129,7 +130,11 @@ function createMini({ BrowserWindow, screen, preloadPath, htmlPath, iconPath, sm
   let bubbleOrigin = null;
   let changingBounds = false;
   let transitions = Promise.resolve();
+  let hovered = false;
   const alive = () => Boolean(win) && !win.isDestroyed();
+  // See-through when the pointer is elsewhere, solid while it is over the window.
+  const opacity = () => (hovered ? 1 : opacityPercent(getState().opacity) / 100);
+  const applyOpacity = () => { if (alive()) win.setOpacity?.(opacity()); };
   const background = () => getState().theme.colors.page;
   const areas = () => screen.getAllDisplays().map(display => display.workArea);
   const primary = () => screen.getPrimaryDisplay().workArea;
@@ -244,6 +249,7 @@ function createMini({ BrowserWindow, screen, preloadPath, htmlPath, iconPath, sm
       },
     });
     if (micro) applyBounds(initialBounds);
+    applyOpacity();
     win.setAlwaysOnTop(true, "floating");
     win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     win.webContents.on("will-navigate", (event, url) => {
@@ -332,6 +338,8 @@ function createMini({ BrowserWindow, screen, preloadPath, htmlPath, iconPath, sm
     },
     hide() {
       wantedVisible = false;
+      hovered = false;
+      applyOpacity();
       if (alive()) win.hide();
     },
     toggle() {
@@ -346,6 +354,11 @@ function createMini({ BrowserWindow, screen, preloadPath, htmlPath, iconPath, sm
     },
     applyTheme() {
       if (alive()) win.setBackgroundColor(background());
+    },
+    applyOpacity,
+    setHover(value) {
+      hovered = Boolean(value);
+      applyOpacity();
     },
     destroy() {
       destroyed = true;
