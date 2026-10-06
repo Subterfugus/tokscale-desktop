@@ -70,7 +70,7 @@ const MINI_API = new Set([
   "miniControl",
   "miniMoveBy",
 ]);
-// Started by the login item: stay in the tray until opened.
+// Started by the login item: stay in the tray until it is opened.
 const startHidden = process.argv.includes("--hidden");
 let preferences = {
   theme: "dark",
