@@ -8,7 +8,7 @@ This is a fork of [junhoyeo/tokscale](https://github.com/junhoyeo/tokscale), wit
 
 The user wants an easy desktop experience while retaining Tokscale's original capabilities. Priorities include connecting Claude desktop, Antigravity, and OpenRouter without complicated setup. Claude desktop is the user's intended Claude connection; do not assume they mean only the standalone Claude Code CLI.
 
-The desktop package is currently version `0.4.8` and pins the published Windows Tokscale engine at `4.17.0`. The application is Electron with a React interface, loads bundled files through `file://`, and does not require a local web server. The original interactive terminal is available through xterm and node-pty. Windows portable builds and optional NSIS installers are supported; current builds are unsigned.
+The desktop package is currently version `0.4.10` (0.4.9 was a throwaway updater test release cut from the `desktop-updater-test` branch, so real versions continue from 0.4.10) and pins the published Windows Tokscale engine at `4.17.0`. The application is Electron with a React interface, loads bundled files through `file://`, and does not require a local web server. The original interactive terminal is available through xterm and node-pty. Windows portable builds and optional NSIS installers are supported; current builds are unsigned.
 
 ## Where to edit
 
@@ -177,6 +177,15 @@ The first successful check silently establishes a baseline. Later head changes p
 Commit identity, ETag, check time, and rate-limit retry deadline are saved separately in `upstream-updates.json` under Electron userData using the ordered preference store. Save succeeds before the notification is emitted, preventing repeated notices across restarts. Requests share in-flight work, have a minimum manual-check interval, a ten-second timeout and bounded response size, and honor rate-limit backoff. Stopping the watcher aborts requests and rejects late results. Failures remain visible in Settings, and later checks retry.
 
 The main window alone may call `upstreamStatus` and `upstreamCheck`; `onUpstreamStatus` subscribes to progress. These channels are not added to `MINI_API`. Monitoring uses no GitHub credentials and sends no usage or chat content. Smoke mode uses a fixed synthetic baseline and never polls GitHub or raises real notifications. Keep running in the tray and launch at login are separate user settings; no checks occur after the app quits.
+
+## Mini window options (version 0.4.10)
+
+`electron/mini-options.cjs` (tested in `mini-options.test.cjs`) is shared by Settings, the mini window and settings validation, and imported by the renderer the same way as `themes.cjs`.
+
+- **Bubble choice.** `miniBubble` is one of the ids in `BUBBLES` (default `scale`). `renderer/bubbles.jsx` draws each one as `BubbleArt`, used by both the bubble and the picker in Settings. Every design is decorative only, in the accent colour on the page colour, with no eyes, creatures or usage data. Movement is transitions only: each `Part` rests untransformed and eases to a `--hover` or `--drag` pose set as CSS variables (`.bubble-part` in `styles.css`), so nothing loops and nothing jumps. The user rejected looping animation and data-carrying bubbles earlier.
+- **Opacity.** `miniOpacity` is a whole percentage from 30 to 100 (default 100). `mini-window.cjs` applies it with `setOpacity`, to the expanded window and the bubble alike. The mini renderer reports the pointer entering and leaving through `miniControl("solid" | "faded")`, and the window is fully solid while the pointer is over it. Hiding the window clears the hover state.
+- **Limit order.** `miniLimitOrder` is a list of source ids. `orderLimits` puts listed limits first in that order and leaves the rest in their usual order after them, so new accounts appear at the end. Settings reorders with drag and drop or the arrow buttons on each row (`moveLimit` returns the full new order). Only the mini window uses the order; the Limits page and the tray do not.
+- **Themes.** Bubblegum (light) and Raspberry (dark) are the two pink themes added on October 6, alongside the older Blossom.
 
 ## Weekly pace and widget bubble (version 0.4.6)
 
