@@ -80,4 +80,20 @@ module.exports = [
       accent: "#c0306b",
     },
   },
+  {
+    id: "bubblegum",
+    name: "Bubblegum",
+    scheme: "light",
+    colors: {
+      page: "#ffd9e8",
+      surface: "#fff4f9",
+      surface2: "#ffdcea",
+      line: "#fbc3d9",
+      lineStrong: "#f29dc0",
+      text: "#3d0f29",
+      text2: "#6e2d4d",
+      text3: "#8a4566",
+      accent: "#e0387f",
+    },
+  },
 ];
