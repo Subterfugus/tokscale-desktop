@@ -278,7 +278,9 @@ async function installUpdate() {
     const env = { ...process.env };
     for (const key of Object.keys(env)) if (/^PORTABLE_EXECUTABLE_/i.test(key)) delete env[key];
     app.releaseSingleInstanceLock();
-    spawn(file, ["--replaces=" + portableFile], { detached: true, stdio: "ignore", env }).unref();
+    // Updating from the mini window or the tray keeps the main window out of the way.
+    const hidden = window && !window.isDestroyed() && window.isVisible() ? [] : ["--hidden"];
+    spawn(file, ["--replaces=" + portableFile, ...hidden], { detached: true, stdio: "ignore", env }).unref();
     app.quit();
   } catch (error) {
     install = { phase: "error", percent: 0, error: String(error?.message || error).slice(0, 200) };
