@@ -336,12 +336,25 @@ function commandArgs(input, noninteractive = true) {
     : argv;
   return result;
 }
+// The limit monitor, the Limits page and the mini window can all ask for the
+// quota report in the same moment, most often right after startup. Two engines
+// refreshing the same sign-ins at once can leave one with stale or failed
+// providers, so identical requests share a single run.
+let usageRun = null;
 function run(input) {
-  return runCommand(enginePath, commandArgs(input), {
+  const usage = Array.isArray(input) && input.length === 2 && input[0] === "usage" && input[1] === "--json";
+  if (usage && usageRun) return usageRun;
+  const task = runCommand(enginePath, commandArgs(input), {
     env: engineEnv(),
     register: (child) => runs.add(child),
     unregister: (child) => runs.delete(child),
   });
+  if (usage) {
+    usageRun = task;
+    const clear = () => { if (usageRun === task) usageRun = null; };
+    task.then(clear, clear);
+  }
+  return task;
 }
 function send(channel, payload) {
   if (window && !window.isDestroyed() && !window.webContents.isDestroyed())
