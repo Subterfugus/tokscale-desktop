@@ -401,6 +401,16 @@ export function SettingsView({ settings, setSettings, info, toCommand, onSaved }
         >
           <Button
             small
+            onClick={() =>
+              api
+                .openExternal("https://github.com/Subterfugus/tokscale-desktop")
+                .catch((e) => setError(safeMessage(e.message)))
+            }
+          >
+            Source code on GitHub
+          </Button>
+          <Button
+            small
             variant="ghost"
             onClick={() =>
               api
@@ -408,7 +418,7 @@ export function SettingsView({ settings, setSettings, info, toCommand, onSaved }
                 .catch((e) => setError(safeMessage(e.message)))
             }
           >
-            Tokscale on GitHub
+            Original Tokscale
           </Button>
         </Row>
         <Row title="Engine" description="Reports, pricing and account tools all come from the bundled Tokscale engine.">
