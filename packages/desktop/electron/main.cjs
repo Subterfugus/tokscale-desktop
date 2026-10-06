@@ -693,7 +693,11 @@ function wireApi() {
     return savePreferences(next);
   });
   handle("miniControl", (action) => {
-    if (action === "main") showMain();
+    // Opening the full app from the mini window leaves only the bubble behind.
+    if (action === "main") {
+      showMain();
+      if (mini && !mini.isMicro?.()) return Promise.resolve(mini.collapse()).then(() => undefined);
+    }
     else if (action === "close") setMiniVisible(false);
     else if (action === "micro") return mini?.collapse();
     else if (action === "expand") return mini?.expand();
