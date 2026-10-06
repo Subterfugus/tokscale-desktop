@@ -112,4 +112,20 @@ module.exports = [
       accent: "#f0a04b",
     },
   },
+  {
+    id: "raspberry",
+    name: "Raspberry",
+    scheme: "dark",
+    colors: {
+      page: "#1f0f18",
+      surface: "#2a1521",
+      surface2: "#3a1d2e",
+      line: "#4a273b",
+      lineStrong: "#663552",
+      text: "#ffe9f3",
+      text2: "#f0b6d0",
+      text3: "#c07f9f",
+      accent: "#ff6fae",
+    },
+  },
 ];
