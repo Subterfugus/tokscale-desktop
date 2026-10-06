@@ -653,6 +653,11 @@ async function createWindow() {
   window.once("ready-to-show", () => {
     if (!smoke && !startHidden) window.show();
   });
+  // A maximized main window fills the screen, so the mini window shrinks to
+  // its bubble instead of sitting on top of it.
+  window.on("maximize", () => {
+    if (mini?.isVisible() && !mini.isMicro()) void Promise.resolve(mini.collapse()).catch(() => {});
+  });
   window.on("close", (event) => {
     if (preferences.minimizeToTray && tray && !quitting && !smoke) {
       event.preventDefault();
