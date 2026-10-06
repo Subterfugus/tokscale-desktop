@@ -8,7 +8,7 @@ const security = require("./security.cjs");
 
 // Exercise main's actual IPC registration without starting a native app.
 function harness() {
-  const handlers = new Map(), broadcasts = [];
+  const handlers = new Map(), broadcasts = [], shown = [];
   const target = url => ({
     isDestroyed: () => false,
     setTitleBarOverlay() {}, setBackgroundColor() {},
@@ -45,6 +45,7 @@ function harness() {
   const api = module.exports;
   const mini = {
     window: widget, applyTheme() {},
+    show: () => shown.push(true), hide: () => shown.push(false), isVisible: () => shown.at(-1) === true,
     collapse: () => api.savePreferences({ miniMicro: true }),
     expand: () => api.savePreferences({ miniMicro: false }),
     moveBy(dx, dy) {
@@ -57,7 +58,7 @@ function harness() {
   electron.app.getPath = () => __dirname;
   api.wireApi();
   const invoke = (from, name, ...args) => handlers.get("tokscale:" + name)({ sender: from.webContents, senderFrame: from.webContents.mainFrame }, ...args);
-  return { api, main, widget, broadcasts, invoke };
+  return { api, main, widget, broadcasts, invoke, shown };
 }
 
 test("micro IPC and main saves expose mode to both renderers while protecting owned settings", async () => {

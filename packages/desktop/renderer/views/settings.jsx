@@ -293,7 +293,7 @@ export function SettingsView({ settings, setSettings, info, toCommand, onSaved }
           />
         </Row>
         {miniWatcher?.error && settings.miniOnAiApps !== false && <Notice tone="error">{miniWatcher.error}</Notice>}
-        <Row title="Open widget on startup" description="Show the widget whenever Tokscale launches. Closing it temporarily keeps this preference on.">
+        <Row title="Open widget on startup" description="Show the widget whenever Tokscale launches.">
           <Switch
             label="Open widget on startup"
             checked={settings.miniLaunchOnStartup !== false}
@@ -302,14 +302,12 @@ export function SettingsView({ settings, setSettings, info, toCommand, onSaved }
         </Row>
         <Row
           title="Show mini window"
-          description="A small always-on-top view of today's cost and your limits."
+          description="A small always-on-top view of today's cost and your limits. Closing the mini window only puts it away for now; it stays on here until you turn it off."
         >
           <Switch
             label="Show mini window"
-            checked={Boolean(settings.miniOpen)}
-            onChange={() =>
-              api.miniControl("toggle").catch((e) => setError(safeMessage(e.message)))
-            }
+            checked={settings.miniEnabled !== false}
+            onChange={(miniEnabled) => save({ miniEnabled })}
           />
         </Row>
         <Row title="Mini window theme">

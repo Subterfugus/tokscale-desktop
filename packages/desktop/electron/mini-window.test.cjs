@@ -145,9 +145,9 @@ test("destroy flushes geometry and a recreated controller restores the new size"
 
 test("startup defaults on and remains independent of a temporarily closed widget", () => {
   assert.equal(shouldOpenOnStartup({}), true);
-  assert.equal(shouldOpenOnStartup({ miniOpen: false }), true);
-  assert.equal(shouldOpenOnStartup({ miniOpen: false, miniLaunchOnStartup: true }), true);
-  assert.equal(shouldOpenOnStartup({ miniOpen: true, miniLaunchOnStartup: false }), false);
+  assert.equal(shouldOpenOnStartup({}), true);
+  assert.equal(shouldOpenOnStartup({ miniLaunchOnStartup: true }), true);
+  assert.equal(shouldOpenOnStartup({ miniLaunchOnStartup: false }), false);
 });
 
 test("closing during initial loading cancels the pending show, and reopening preserves keyboard focus", () => {

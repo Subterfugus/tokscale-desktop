@@ -116,14 +116,14 @@ function App() {
         setReady(true);
       })
       .catch(() => setReady(true));
-    // Only the mini window's state changes outside this window (tray menu,
-    // Alt+F4). Taking every broadcast key would let an older save briefly
-    // overwrite a newer choice made here.
+    // Only the mini window's switch changes outside this window (tray menu).
+    // Taking every broadcast key would let an older save briefly overwrite a
+    // newer choice made here.
     const offSettings = api.onSettingsChanged((s) =>
       setSettings((x) =>
-        Boolean(x.miniOpen) === Boolean(s.miniOpen)
+        (x.miniEnabled !== false) === (s.miniEnabled !== false)
           ? x
-          : { ...x, miniOpen: s.miniOpen },
+          : { ...x, miniEnabled: s.miniEnabled },
       ),
     );
     const listen = () => setVisible(!document.hidden);

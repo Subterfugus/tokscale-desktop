@@ -100,12 +100,15 @@ function savePreferences(patch) {
     const homeChanged = preferences.home !== values.home;
     const claudeChanged = Boolean(preferences.claudeDesktopConnected) !== Boolean(values.claudeDesktopConnected);
     const upstreamChanged = (preferences.upstreamNotifications !== false) !== (values.upstreamNotifications !== false);
+    const miniChanged = (preferences.miniEnabled !== false) !== (values.miniEnabled !== false);
     const appsChanged = (preferences.miniOnAiApps !== false) !== (values.miniOnAiApps !== false);
     preferences=values; settingsWarning='';
     if (upstreamMonitor && !smoke && upstreamChanged) {
       if (values.upstreamNotifications !== false) upstreamMonitor.start();
       else upstreamMonitor.stop();
     }
+    // Turning the mini window on shows it now; turning it off puts it away.
+    if (mini && miniChanged) values.miniEnabled !== false ? mini.show() : mini.hide();
     if (appWatcher && !smoke && appsChanged) {
       if (values.miniOnAiApps !== false) appWatcher.start();
       else appWatcher.stop();
@@ -144,14 +147,13 @@ function showMain() {
   window.show();
   window.focus();
 }
+// The setting says whether the mini window may appear at all. Closing it only
+// puts it away until startup or an AI app brings it back, and never changes
+// the setting.
+const miniEnabled = () => preferences.miniEnabled !== false;
 function setMiniVisible(visible) {
   if (!mini) return;
-  visible ? mini.show() : mini.hide();
-}
-// Called by the mini window whenever it is really shown or hidden.
-function miniVisibilityChanged(visible) {
-  if (smoke || quitting || Boolean(preferences.miniOpen) === visible) return;
-  void savePreferences({ miniOpen: visible }).catch(() => {});
+  visible && miniEnabled() ? mini.show() : mini.hide();
 }
 function refreshTray() {
   if (!tray) return;
@@ -167,8 +169,8 @@ function refreshTray() {
       {
         label: "Mini window",
         type: "checkbox",
-        checked: Boolean(preferences.miniOpen),
-        click: (item) => setMiniVisible(item.checked),
+        checked: miniEnabled(),
+        click: (item) => void savePreferences({ miniEnabled: item.checked }).catch(() => {}),
       },
       { type: "separator" },
       ...(menuLines.length
@@ -591,7 +593,7 @@ function wireApi() {
   handle("saveSettings", async (value) => {
     const next = security.settings(value);
     // These are owned by the main process and follow real state.
-    for (const key of ["claudeDesktopConnected", "miniOpen", "miniBounds", "miniMicro", "miniMicroBounds"]) delete next[key];
+    for (const key of ["claudeDesktopConnected", "miniBounds", "miniMicro", "miniMicroBounds"]) delete next[key];
     const home = next.home;
     if (home && !(await fs.stat(home)).isDirectory())
       throw new Error("Home must be a folder");
@@ -600,7 +602,6 @@ function wireApi() {
   handle("miniControl", (action) => {
     if (action === "main") showMain();
     else if (action === "close") setMiniVisible(false);
-    else if (action === "toggle") setMiniVisible(!mini?.isVisible());
     else if (action === "micro") return mini?.collapse();
     else if (action === "expand") return mini?.expand();
     else throw new Error("Invalid mini window action");
@@ -790,7 +791,7 @@ if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on("second-instance", (_event, argv) => {
     if (!argv.includes("--hidden")) showMain();
-    if (shouldOpenOnStartup(preferences)) mini?.show();
+    if (miniEnabled() && shouldOpenOnStartup(preferences)) mini?.show();
   });
   app
     .whenReady()
@@ -860,10 +861,9 @@ else {
           ...(micro !== undefined ? { miniMicro: micro } : {}),
           ...(microBounds ? { miniMicroBounds: microBounds } : {}),
         }),
-        onVisibility: miniVisibilityChanged,
       });
       appWatcher = createAppWatcher({
-        onOpen: () => { if (!mini.isVisible()) mini.show(); },
+        onOpen: () => { if (miniEnabled() && !mini.isVisible()) mini.show(); },
         onStatus: status => send("miniWatchStatus", status),
       });
       if (smoke) {
@@ -885,7 +885,7 @@ else {
       refreshTray();
       monitor.start();
       if (preferences.upstreamNotifications !== false) upstreamMonitor.start();
-      if (shouldOpenOnStartup(preferences)) mini.show();
+      if (miniEnabled() && shouldOpenOnStartup(preferences)) mini.show();
       if (preferences.miniOnAiApps !== false) appWatcher.start();
     })
     .catch(async (error) => {

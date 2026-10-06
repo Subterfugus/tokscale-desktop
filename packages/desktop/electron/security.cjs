@@ -95,7 +95,7 @@ function settings(value) {
     "minimizeToTray",
     "limitNotifications",
     "upstreamNotifications",
-    "miniOpen",
+    "miniEnabled",
     "miniLaunchOnStartup",
     "miniOnAiApps",
     "miniMicro",
