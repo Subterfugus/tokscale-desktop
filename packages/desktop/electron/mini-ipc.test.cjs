@@ -8,10 +8,10 @@ const security = require("./security.cjs");
 
 // Exercise main's actual IPC registration without starting a native app.
 function harness() {
-  const handlers = new Map(), broadcasts = [], shown = [];
+  const handlers = new Map(), broadcasts = [], shown = [], engineRuns = [];
   const target = url => ({
     isDestroyed: () => false,
-    setTitleBarOverlay() {}, setBackgroundColor() {},
+    setTitleBarOverlay() {}, setBackgroundColor() {}, isMinimized: () => false, show() {}, focus() {},
     webContents: { mainFrame: { url }, send: (channel, value) => broadcasts.push({ url, channel, value }) },
   });
   const { pathToFileURL } = require("node:url");
@@ -37,7 +37,7 @@ function harness() {
     require: name => {
       if (name === "electron") return electron;
       if (name === "node-pty") throw new Error("Not used in IPC tests");
-      if (name === "./runner.cjs") return { runCommand: async () => ({ code: 0, stdout: "[]" }) };
+      if (name === "./runner.cjs") return { runCommand: async (_engine, args) => { engineRuns.push(args); return { code: 0, stdout: "[]" }; } };
       return localRequire(name);
     },
     module, __dirname, process: { argv: [], env: {}, platform: "win32" }, console, setTimeout, clearTimeout,
@@ -58,7 +58,7 @@ function harness() {
   electron.app.getPath = () => __dirname;
   api.wireApi();
   const invoke = (from, name, ...args) => handlers.get("tokscale:" + name)({ sender: from.webContents, senderFrame: from.webContents.mainFrame }, ...args);
-  return { api, main, widget, broadcasts, invoke, shown };
+  return { api, main, widget, broadcasts, invoke, shown, engineRuns };
 }
 
 test("micro IPC and main saves expose mode to both renderers while protecting owned settings", async () => {
@@ -93,6 +93,26 @@ test("closing the mini window hides it without touching its setting; only the se
   await invoke(main, "saveSettings", { miniEnabled: true });
   assert.deepEqual(shown, [false, false, true]);
   assert.throws(() => invoke(widget, "saveSettings", { miniEnabled: false }), /Untrusted/);
+});
+
+test("opening the full app from the mini window shrinks it to the bubble", async () => {
+  const { widget, invoke } = harness();
+  assert.equal(invoke(widget, "getSettings").miniMicro, false);
+  await invoke(widget, "miniControl", "main");
+  assert.equal(invoke(widget, "getSettings").miniMicro, true);
+});
+
+test("simultaneous quota reports share one engine run, and later ones run again", async () => {
+  const { main, invoke, engineRuns } = harness();
+  const quota = () => engineRuns.filter(args => args.includes("usage")).length;
+  const [one, two] = [invoke(main, "run", ["usage", "--json"]), invoke(main, "run", ["usage", "--json"])];
+  assert.equal(one, two);
+  await one;
+  assert.equal(quota(), 1);
+  await invoke(main, "run", ["usage", "--json"]);
+  assert.equal(quota(), 2);
+  await Promise.all([invoke(main, "run", ["models", "--json"]), invoke(main, "run", ["models", "--json"])]);
+  assert.equal(engineRuns.length, 4);
 });
 
 test("preload exposes mini movement on the existing invoke channel", () => {
