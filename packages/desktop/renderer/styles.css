@@ -411,6 +411,10 @@ dd,
   background: var(--surface-2);
   color: var(--text);
 }
+.icon-button.update-ready,
+.icon-button.update-ready:hover {
+  color: var(--accent);
+}
 .icon-button svg {
   transition: transform 0.12s;
 }

@@ -154,4 +154,4 @@ function createUpstreamMonitor({ store, fetchImpl = fetch, notify = () => {}, on
   };
 }
 
-module.exports = { createUpstreamMonitor, validateState, REPOSITORY, ENDPOINT, INTERVAL_MS };
+module.exports = { createUpstreamMonitor, validateState, readJson, REPOSITORY, ENDPOINT, INTERVAL_MS };

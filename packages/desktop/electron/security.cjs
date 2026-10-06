@@ -95,6 +95,7 @@ function settings(value) {
     "minimizeToTray",
     "limitNotifications",
     "upstreamNotifications",
+    "appUpdateChecks",
     "miniEnabled",
     "miniLaunchOnStartup",
     "miniOnAiApps",

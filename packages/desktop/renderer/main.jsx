@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import {
   Activity,
   AlertCircle,
+  ArrowDownCircle,
+  Loader2,
   BarChart3,
   CalendarDays,
   ChevronDown,
@@ -20,7 +22,7 @@ import {
 import "./styles.css";
 import { api, useReport } from "./use-report.js";
 import { Button, IconButton, Notice, Popover, Select, Toaster } from "./ui.jsx";
-import { brand, clock, dateLabel } from "./format.js";
+import { brand, clock, dateLabel, updateLabel } from "./format.js";
 import {
   ALL_TOKEN_TYPES,
   TOKEN_TYPES,
@@ -224,6 +226,15 @@ function App() {
   useEffect(() => {
     if (page !== "models") setModelSearch("");
   }, [page]);
+  const [update, setUpdate] = useState(null);
+  useEffect(() => {
+    let alive = true, revision = 0;
+    api.appUpdateStatus().then((status) => { if (alive && revision === 0) setUpdate(status); }).catch(() => {});
+    const off = api.onAppUpdateStatus((status) => { revision++; if (alive) setUpdate(status); });
+    return () => { alive = false; off(); };
+  }, []);
+  const updateReady = settings.appUpdateChecks !== false && update?.available;
+  const updateBusy = ["downloading", "restarting"].includes(update?.install?.phase);
   const toCommand = (c) => {
     setCommand(c);
     setPage("commands");
@@ -298,14 +309,26 @@ function App() {
       <main className="main">
         <header className="page-header">
           <h1>{title}</h1>
-          {refreshable && (
+          {(refreshable || updateReady) && (
             <div className="header-actions">
-              <span className="refresh-time">Updated {clock(lastRefresh)}</span>
-              <IconButton
-                icon={RefreshCw}
-                label="Refresh (Ctrl+R)"
-                onClick={refresh}
-              />
+              {refreshable && <span className="refresh-time">Updated {clock(lastRefresh)}</span>}
+              {updateReady && (
+                <IconButton
+                  icon={updateBusy ? Loader2 : ArrowDownCircle}
+                  spin={updateBusy}
+                  disabled={updateBusy}
+                  className="icon-button update-ready"
+                  label={updateLabel(update)}
+                  onClick={() => api.appUpdateInstall().catch(() => {})}
+                />
+              )}
+              {refreshable && (
+                <IconButton
+                  icon={RefreshCw}
+                  label="Refresh (Ctrl+R)"
+                  onClick={refresh}
+                />
+              )}
             </div>
           )}
         </header>

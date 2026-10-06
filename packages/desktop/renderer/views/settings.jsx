@@ -65,6 +65,8 @@ export function SettingsView({ settings, setSettings, info, toCommand, onSaved }
   const [saved, setSaved] = useState(false),
     [error, setError] = useState(""),
     [upstream, setUpstream] = useState(null),
+    [update, setUpdate] = useState(null),
+    [checkingUpdate, setCheckingUpdate] = useState(false),
     [miniWatcher, setMiniWatcher] = useState(null),
     [limits, setLimits] = useState(null),
     [checkingUpstream, setCheckingUpstream] = useState(false);
@@ -76,6 +78,12 @@ export function SettingsView({ settings, setSettings, info, toCommand, onSaved }
     let alive = true, revision = 0;
     api.miniWatchStatus().then(status => { if (alive && !revision) setMiniWatcher(status); }).catch(() => {});
     const off = api.onMiniWatchStatus(status => { revision++; if (alive) setMiniWatcher(status); });
+    return () => { alive = false; off(); };
+  }, []);
+  useEffect(() => {
+    let alive = true, revision = 0;
+    api.appUpdateStatus().then(status => { if (alive && revision === 0) setUpdate(status); }).catch(() => {});
+    const off = api.onAppUpdateStatus(status => { revision++; if (alive) setUpdate(status); });
     return () => { alive = false; off(); };
   }, []);
   useEffect(() => {
@@ -255,6 +263,36 @@ export function SettingsView({ settings, setSettings, info, toCommand, onSaved }
             onChange={(launchAtLogin) => save({ launchAtLogin })}
           />
         </Row>
+      </Card>
+      <Card title="App updates">
+        <Row
+          title="Check for new versions"
+          description="Look for a newer Tokscale Desktop release on GitHub every few hours. When there is one, an arrow icon appears at the top of this window and the mini window. Clicking it downloads the new version and restarts into it; nothing is installed until you click."
+        >
+          <Switch
+            label="Check for new versions"
+            checked={settings.appUpdateChecks !== false}
+            onChange={(appUpdateChecks) => save({ appUpdateChecks })}
+          />
+        </Row>
+        <Row
+          title={update?.available ? `Version ${update.available} is available` : "This version is up to date"}
+          description={`You have ${info.version || "—"}${update?.checkedAt ? ` · Checked ${dateTime(update.checkedAt)}` : " · Not checked yet"}`}
+        >
+          <Button small disabled={checkingUpdate || update?.checking} onClick={async () => {
+            setCheckingUpdate(true);
+            try { setUpdate(await api.appUpdateCheck()); }
+            catch (e) { setError(safeMessage(e.message)); }
+            finally { setCheckingUpdate(false); }
+          }}>{checkingUpdate || update?.checking ? "Checking…" : "Check for updates"}</Button>
+          {update?.available && (
+            <Button small variant="primary" disabled={["downloading", "restarting"].includes(update.install?.phase)} onClick={() => api.appUpdateInstall().catch(e => setError(safeMessage(e.message)))}>
+              {update.install?.phase === "downloading" ? `Downloading ${update.install.percent}%` : update.install?.phase === "restarting" ? "Restarting…" : update.installable && update.install?.phase !== "error" ? "Update now" : "Download"}
+            </Button>
+          )}
+        </Row>
+        {update?.error && <Notice tone="error">{update.error}</Notice>}
+        {update?.install?.phase === "error" && <Notice tone="error">The update could not be installed: {update.install.error} Use Download to get it from GitHub.</Notice>}
       </Card>
       <Card title="Upstream updates">
         <Row

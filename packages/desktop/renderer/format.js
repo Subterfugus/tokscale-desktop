@@ -85,6 +85,16 @@ export const safeMessage = (s) =>
   );
 // Weekly pace for a quota metric as the engine or Claude desktop reports it;
 // null for anything that is not a weekly limit with a future reset.
+// One tooltip for the update icon in both windows.
+export function updateLabel(update) {
+  const phase = update?.install?.phase;
+  if (phase === "downloading") return `Downloading version ${update.available} (${update.install.percent}%)`;
+  if (phase === "restarting") return "Restarting into the new version";
+  if (phase === "error") return `The update could not be installed: ${update.install.error} Click to open the download page`;
+  return update?.installable
+    ? `Update to version ${update.available}. Tokscale restarts when the download finishes`
+    : `Version ${update?.available} is available. Open the download page`;
+}
 export const metricPace = (metric) =>
   limitPace.calculatePace({
     label: metric?.label,

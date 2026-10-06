@@ -528,6 +528,14 @@ async function runUiChecks({ window, mini, output, terminalCount }) {
     await wait(async setting => (await window.tokscale.getSettings())[setting] === true, setting);
   }
   checks.push("Widget startup and AI-app detection preferences default on and save independently");
+  assert.equal(await exec(() => document.querySelector('input[aria-label="Check for new versions"]').checked), true);
+  await click(".setting-control button", "Check for updates");
+  await wait(() => document.querySelector(".settings")?.innerText.includes("Version 999.0.0 is available"), null, "A newer release was not offered");
+  const appUpdate = await exec(() => window.tokscale.appUpdateStatus());
+  assert.equal(appUpdate.url, "https://github.com/Subterfugus/tokscale-desktop/releases/tag/desktop-v999.0.0");
+  assert.equal(appUpdate.error, null);
+  await wait(() => document.querySelector(".page-header .update-ready")?.getAttribute("aria-label")?.includes("999.0.0"), null, "The main window did not show the update icon");
+  checks.push("App update check offers a newer desktop release with a download link and ignores engine tags");
   assert.equal(await exec(() => document.querySelector('input[aria-label="Upstream update notifications"]').checked), true);
   await click(".setting-control button", "Check now");
   await wait(() => document.querySelector(".settings")?.innerText.includes("Last checked"), null, "Upstream update check did not display its check time");
@@ -623,6 +631,12 @@ async function runUiChecks({ window, mini, output, terminalCount }) {
     await assert.rejects(inMini(`window.tokscale.saveSettings({ theme: "light" })`), "Mini window could change app settings");
     await assert.rejects(inMini(`window.tokscale.claudeDesktopRefresh({})`), "Mini window could initiate a Claude connection");
     await assert.rejects(inMini(`window.tokscale.upstreamCheck()`), "Mini window could initiate upstream network checks");
+    await assert.rejects(inMini(`window.tokscale.appUpdateCheck()`), "Mini window could initiate app update checks");
+    await until(`document.querySelector(".mini-bar .update-ready")?.title === "Version 999.0.0 is available. Open the download page"`, "Mini window did not show the update icon");
+    await exec(() => window.tokscale.saveSettings({ appUpdateChecks: false }));
+    await until(`!document.querySelector(".mini-bar .update-ready")`, "Mini window kept the update icon with checks turned off");
+    await exec(() => window.tokscale.saveSettings({ appUpdateChecks: true }));
+    checks.push("Both windows show an update icon when a newer release exists and hide it when checks are off");
     await exec(() => window.tokscale.saveSettings({ miniTheme: "match" }));
     await until(`document.documentElement.dataset.theme === "dark"`, "Mini window did not follow the main theme again");
     checks.push("Mini window shows today's cost, keeps its own theme, and cannot change settings");

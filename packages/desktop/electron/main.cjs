@@ -30,6 +30,8 @@ const { createMini, shouldOpenOnStartup } = require("./mini-window.cjs");
 const { createAppWatcher } = require("./ai-app-watcher.cjs");
 const { createLimitMonitor, formatStatus, tooltip } = require("./limit-monitor.cjs");
 const { createUpstreamMonitor, validateState: validateUpstreamState } = require("./upstream-monitor.cjs");
+const { createAppUpdate, validateState: validateAppUpdateState } = require("./app-update.cjs");
+const { downloadUpdate, replacedFile } = require("./app-install.cjs");
 const pkg = require("../package.json");
 const enginePath = app.isPackaged
   ? path.join(process.resourcesPath, "engine", "tokscale.exe")
@@ -50,6 +52,7 @@ let window,
   mini,
   monitor,
   upstreamMonitor,
+  appUpdate,
   appWatcher,
   claudeRequests,
   claudeDisconnecting = false,
@@ -63,6 +66,7 @@ const MINI_API = new Set([
   "run",
   "connectionStatus",
   "limitSnapshot",
+  "appUpdateStatus",
   "miniControl",
   "miniMoveBy",
 ]);
@@ -75,6 +79,7 @@ let preferences = {
   defaultPeriod: "month",
   includeGeminiThoughts: true,
   upstreamNotifications: true,
+  appUpdateChecks: true,
   miniLaunchOnStartup: true,
   miniOnAiApps: true,
   miniMicro: false,
@@ -100,12 +105,17 @@ function savePreferences(patch) {
     const homeChanged = preferences.home !== values.home;
     const claudeChanged = Boolean(preferences.claudeDesktopConnected) !== Boolean(values.claudeDesktopConnected);
     const upstreamChanged = (preferences.upstreamNotifications !== false) !== (values.upstreamNotifications !== false);
+    const updatesChanged = (preferences.appUpdateChecks !== false) !== (values.appUpdateChecks !== false);
     const miniChanged = (preferences.miniEnabled !== false) !== (values.miniEnabled !== false);
     const appsChanged = (preferences.miniOnAiApps !== false) !== (values.miniOnAiApps !== false);
     preferences=values; settingsWarning='';
     if (upstreamMonitor && !smoke && upstreamChanged) {
       if (values.upstreamNotifications !== false) upstreamMonitor.start();
       else upstreamMonitor.stop();
+    }
+    if (appUpdate && !smoke && updatesChanged) {
+      if (values.appUpdateChecks !== false) appUpdate.start();
+      else appUpdate.stop();
     }
     // Turning the mini window on shows it now; turning it off puts it away.
     if (mini && miniChanged) values.miniEnabled !== false ? mini.show() : mini.hide();
@@ -232,6 +242,71 @@ const switchValue = (name) =>
   process.argv
     .find((arg) => arg.startsWith(name + "="))
     ?.slice(name.length + 1);
+// One-click updates swap the portable file the user launched for a newer one
+// in the same folder. Other builds only link to the release page.
+const portableFile = app.isPackaged ? process.env.PORTABLE_EXECUTABLE_FILE || "" : "";
+let install = { phase: "idle", percent: 0, error: null };
+function updateStatus() {
+  const status = appUpdate?.snapshot();
+  return status ? { ...status, installable: Boolean(status.asset && portableFile && !smoke), install } : null;
+}
+function publishUpdate() {
+  const status = updateStatus();
+  for (const target of [window, mini?.window])
+    if (status && target && !target.isDestroyed()) target.webContents.send("tokscale:appUpdateStatus", status);
+}
+async function installUpdate() {
+  const status = updateStatus();
+  if (!status?.available || ["downloading", "restarting"].includes(install.phase)) return status;
+  if (!status.installable || install.phase === "error") {
+    await shell.openExternal(security.externalUrl(status.url));
+    return status;
+  }
+  install = { phase: "downloading", percent: 0, error: null };
+  publishUpdate();
+  try {
+    const file = await downloadUpdate({
+      version: status.available, ...status.asset, dir: path.dirname(portableFile),
+      onProgress: (part) => {
+        const percent = Math.floor(part * 100);
+        if (percent !== install.percent) { install = { ...install, percent }; publishUpdate(); }
+      },
+    });
+    install = { phase: "restarting", percent: 100, error: null };
+    publishUpdate();
+    // The new build starts as its own portable app and retires this file.
+    const env = { ...process.env };
+    for (const key of Object.keys(env)) if (/^PORTABLE_EXECUTABLE_/i.test(key)) delete env[key];
+    app.releaseSingleInstanceLock();
+    spawn(file, ["--replaces=" + portableFile], { detached: true, stdio: "ignore", env }).unref();
+    app.quit();
+  } catch (error) {
+    install = { phase: "error", percent: 0, error: String(error?.message || error).slice(0, 200) };
+    publishUpdate();
+  }
+  return updateStatus();
+}
+// After an update the previous build goes to the Recycle Bin once it has exited.
+function retireReplacedBuild() {
+  const old = replacedFile(switchValue("--replaces"), portableFile);
+  if (!old) return;
+  let tries = 0;
+  const attempt = () => shell.trashItem(old).catch(() => {
+    if (++tries < 20) setTimeout(attempt, 3000).unref();
+  });
+  setTimeout(attempt, 3000).unref();
+}
+// A build started by an update may arrive before the old one has let go.
+function singleInstance() {
+  if (app.requestSingleInstanceLock()) return true;
+  if (!switchValue("--replaces")) return false;
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  for (let i = 0; i < 40; i++) {
+    Atomics.wait(pause, 0, 0, 500);
+    if (app.requestSingleInstanceLock()) return true;
+  }
+  return false;
+}
 function engineEnv() {
   const isolated = smoke && switchValue("--smoke-home");
   const env = isolated
@@ -299,6 +374,9 @@ function wireApi() {
   handle("miniWatchStatus", () => appWatcher?.snapshot() || null);
   handle("upstreamStatus", () => upstreamMonitor?.snapshot() || null);
   handle("upstreamCheck", () => upstreamMonitor.poll());
+  handle("appUpdateStatus", () => updateStatus());
+  handle("appUpdateCheck", () => appUpdate.poll().then(updateStatus));
+  handle("appUpdateInstall", () => installUpdate());
   const claudeDesktop = createClaudeDesktop({ env: engineEnv() });
   let claudeRevision = 0;
   handle("claudeDesktopStatus", () => claudeDesktop.status());
@@ -604,6 +682,8 @@ function wireApi() {
     else if (action === "close") setMiniVisible(false);
     else if (action === "micro") return mini?.collapse();
     else if (action === "expand") return mini?.expand();
+    // The widget never supplies a link or a file; main decides both.
+    else if (action === "update") return installUpdate().then(() => undefined);
     else throw new Error("Invalid mini window action");
   });
   handle("miniMoveBy", (dx, dy) => {
@@ -792,7 +872,7 @@ if (smoke) {
   const output = switchValue("--smoke-output");
   if (output) app.setPath("userData", path.join(output, "app-data"));
 }
-if (!app.requestSingleInstanceLock()) app.quit();
+if (!singleInstance()) app.quit();
 else {
   app.on("second-instance", (_event, argv) => {
     if (!argv.includes("--hidden")) showMain();
@@ -809,6 +889,30 @@ else {
       applyTheme();
       nativeTheme.on("updated", applyTheme);
       wireApi();
+      // One toast path for both update checks; clicking opens the link.
+      const linkNotice = ({ title, body, url }) => {
+        if (Notification.isSupported()) {
+          const notice = new Notification({ title, body, icon: iconPath });
+          upstreamNotices.add(notice);
+          notice.on("click", () => void shell.openExternal(security.externalUrl(url)).catch(() => {}));
+          notice.on("close", () => upstreamNotices.delete(notice));
+          notice.on("failed", () => {
+            upstreamNotices.delete(notice);
+            if (tray) tray.displayBalloon({ title, content: body });
+          });
+          notice.show();
+        } else if (tray) tray.displayBalloon({ title, content: body });
+      };
+      appUpdate = createAppUpdate({
+        current: app.getVersion(),
+        store: createPreferences(path.join(app.getPath("userData"), "app-update.json"), {}, validateAppUpdateState),
+        ...(smoke ? { fetchImpl: async () => ({
+          ok: true, status: 200, headers: new Headers(),
+          text: async () => JSON.stringify([{ tag_name: "desktop-v999.0.0" }, { tag_name: "v1000.0.0" }]),
+        }) } : {}),
+        // Both windows show an update icon; there is no toast for this.
+        onStatus: publishUpdate,
+      });
       upstreamMonitor = createUpstreamMonitor({
         store: createPreferences(path.join(app.getPath("userData"), "upstream-updates.json"), {}, validateUpstreamState),
         ...(smoke ? { fetchImpl: async () => ({
@@ -816,20 +920,7 @@ else {
           text: async () => JSON.stringify([{ sha: "a".repeat(40), commit: { message: "Synthetic upstream update baseline" } }]),
         }) } : {}),
         onStatus: (status) => send("upstreamStatus", status),
-        notify: ({ title, body, url }) => {
-          if (smoke || preferences.upstreamNotifications === false) return;
-          if (Notification.isSupported()) {
-            const notice = new Notification({ title, body, icon: iconPath });
-            upstreamNotices.add(notice);
-            notice.on("click", () => void shell.openExternal(security.externalUrl(url)).catch(() => {}));
-            notice.on("close", () => upstreamNotices.delete(notice));
-            notice.on("failed", () => {
-              upstreamNotices.delete(notice);
-              if (tray) tray.displayBalloon({ title, content: body });
-            });
-            notice.show();
-          } else if (tray) tray.displayBalloon({ title, content: body });
-        },
+        notify: (notice) => { if (!smoke && preferences.upstreamNotifications !== false) linkNotice(notice); },
       });
       // Both windows and the tray read one monitor, including the first mini
       // render. Synthetic checks never access live account credentials.
@@ -890,6 +981,8 @@ else {
       refreshTray();
       monitor.start();
       if (preferences.upstreamNotifications !== false) upstreamMonitor.start();
+      if (!smoke && preferences.appUpdateChecks !== false) appUpdate.start();
+      retireReplacedBuild();
       if (miniEnabled() && shouldOpenOnStartup(preferences)) mini.show();
       if (preferences.miniOnAiApps !== false) appWatcher.start();
     })
@@ -912,6 +1005,7 @@ else {
     quitting = true;
     monitor?.stop();
     upstreamMonitor?.stop();
+    appUpdate?.stop();
     appWatcher?.stop();
     for (const notice of upstreamNotices) notice.close();
     upstreamNotices.clear();

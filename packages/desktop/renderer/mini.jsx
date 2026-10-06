@@ -1,10 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Maximize2, Minimize2, X } from "lucide-react";
+import { ArrowDownCircle, Loader2, Maximize2, Minimize2, X } from "lucide-react";
 import "./styles.css";
 import "./mini.css";
 import { Meter } from "./charts.jsx";
-import { clock, compact, dateTime, money, number, safeMessage } from "./format.js";
+import { clock, compact, dateTime, money, number, safeMessage, updateLabel } from "./format.js";
 import { modelTokenTotal } from "./report-data.js";
 import { cssVariable, resolveTheme } from "./themes.js";
 
@@ -161,8 +161,19 @@ function Mini() {
     [refreshing, setRefreshing] = useState(false),
     [updated, setUpdated] = useState(null),
     [visible, setVisible] = useState(document.visibilityState !== "hidden"),
-    [leaving, setLeaving] = useState(false);
+    [leaving, setLeaving] = useState(false),
+    [update, setUpdate] = useState(null);
   const settingsRevision = useRef(0);
+  useEffect(() => {
+    let alive = true, revision = 0, off;
+    try {
+      Promise.resolve(api.appUpdateStatus()).then((status) => { if (alive && revision === 0) setUpdate(status); }).catch(() => {});
+      off = api.onAppUpdateStatus((status) => { revision++; if (alive) setUpdate(status); });
+    } catch {
+      /* The update icon is best effort. */
+    }
+    return () => { alive = false; try { off?.(); } catch {} };
+  }, []);
   useMiniTheme(settings);
   useEffect(() => {
     let alive = true;
@@ -270,6 +281,20 @@ function Mini() {
       <header className="mini-bar">
         <Logo />
         <strong>Tokscale</strong>
+        {settings.appUpdateChecks !== false && update?.available && (
+          <button
+            type="button"
+            className="icon-button update-ready"
+            aria-label={updateLabel(update)}
+            title={updateLabel(update)}
+            disabled={["downloading", "restarting"].includes(update.install?.phase)}
+            onClick={() => api.miniControl("update")?.catch?.(() => {})}
+          >
+            {["downloading", "restarting"].includes(update.install?.phase)
+              ? <Loader2 size={14} className="spin" />
+              : <ArrowDownCircle size={14} />}
+          </button>
+        )}
         <button
           type="button"
           className="icon-button"
