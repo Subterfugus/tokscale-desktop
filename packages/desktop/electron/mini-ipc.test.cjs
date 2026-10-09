@@ -8,7 +8,7 @@ const security = require("./security.cjs");
 
 // Exercise main's actual IPC registration without starting a native app.
 function harness() {
-  const handlers = new Map(), broadcasts = [], shown = [], engineRuns = [];
+  const handlers = new Map(), broadcasts = [], shown = [], engineRuns = [], engine = { stdout: "[]" };
   const target = url => ({
     isDestroyed: () => false,
     setTitleBarOverlay() {}, setBackgroundColor() {}, isMinimized: () => false, show() {}, focus() {},
@@ -32,12 +32,13 @@ function harness() {
       setup(mainWindow, widget, store) { window = mainWindow; mini = widget; preferenceStore = store; },
       savePreferences, wireApi, limitSources,
       setClaude(requests) { claudeRequests = requests; },
+      setSync(service) { sync = service; },
     };
   `, {
     require: name => {
       if (name === "electron") return electron;
       if (name === "node-pty") throw new Error("Not used in IPC tests");
-      if (name === "./runner.cjs") return { runCommand: async (_engine, args) => { engineRuns.push(args); return { code: 0, stdout: "[]" }; } };
+      if (name === "./runner.cjs") return { runCommand: async (_engine, args) => { engineRuns.push(args); return { code: 0, stdout: engine.stdout }; } };
       return localRequire(name);
     },
     module, __dirname, process: { argv: [], env: {}, platform: "win32" }, console, setTimeout, clearTimeout,
@@ -58,7 +59,7 @@ function harness() {
   electron.app.getPath = () => __dirname;
   api.wireApi();
   const invoke = (from, name, ...args) => handlers.get("tokscale:" + name)({ sender: from.webContents, senderFrame: from.webContents.mainFrame }, ...args);
-  return { api, main, widget, broadcasts, invoke, shown, engineRuns };
+  return { api, main, widget, broadcasts, invoke, shown, engineRuns, engine };
 }
 
 test("micro IPC and main saves expose mode to both renderers while protecting owned settings", async () => {
@@ -124,4 +125,33 @@ test("preload exposes mini movement on the existing invoke channel", () => {
   }) });
   api.miniMoveBy(12, -8);
   assert.deepEqual(calls[0], ["tokscale:miniMoveBy", 12, -8]);
+});
+
+test("reports gain synced usage for both windows, except where only this computer can answer", async () => {
+  const { main, widget, invoke, api, engine } = harness();
+  const report = (groupBy) => JSON.stringify({
+    groupBy, entries: [{ client: "claude", model: "opus", provider: "anthropic", input: 10, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, messageCount: 1, cost: 1 }],
+    totalInput: 10, totalOutput: 0, totalCacheRead: 0, totalCacheWrite: 0, totalMessages: 1, totalCost: 1,
+  });
+  const days = { "2026-10-01": [{ client: "codex", modelId: "gpt", providerId: "openai", tokens: { input: 5, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 }, cost: 2, messages: 3 }] };
+  const asked = [];
+  api.setSync({ extra: (selected) => { asked.push(selected); return selected === "other" ? { includeLocal: false, days } : { includeLocal: true, days: selected === "all" ? days : {} }; } });
+  engine.stdout = report("client,model");
+  const total = async (from, args, ...rest) => JSON.parse((await invoke(from, "run", args, ...rest)).stdout).totalCost;
+  assert.equal(await total(main, ["models", "--json"]), 3);
+  assert.equal(await total(widget, ["--no-spinner", "models", "--json"]), 3);
+  assert.equal(await total(main, ["models", "--json"], "other"), 2);
+  assert.equal(await total(main, ["models", "--json"], "self"), 1);
+  assert.equal(await total(main, ["models", "--json", "--client", "claude"]), 1);
+  assert.equal(await total(main, ["models", "--json", "--until", "2026-09-30"]), 1);
+  // A custom report home is another folder's data and is never combined.
+  assert.equal(await total(main, ["models", "--json", "--home", "D:\Other"]), 1);
+  assert.deepEqual(asked, ["all", "all", "other", "self", "all", "all"]);
+  engine.stdout = report("workspace,model");
+  assert.equal(await total(main, ["models", "--json", "--group-by", "workspace,model"]), 1);
+  assert.equal(await total(main, ["models", "--json", "--group-by", "workspace,model"], "other"), 0);
+  await assert.rejects(invoke(main, "run", ["models", "--json"], 7), /Invalid computer/);
+  // Unreadable engine output is passed on as it is.
+  engine.stdout = "not json";
+  assert.equal((await invoke(main, "run", ["models", "--json"])).stdout, "not json");
 });

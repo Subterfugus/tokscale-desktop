@@ -32,6 +32,8 @@ const { createLimitMonitor, formatStatus, tooltip } = require("./limit-monitor.c
 const { createUpstreamMonitor, validateState: validateUpstreamState } = require("./upstream-monitor.cjs");
 const { createAppUpdate, validateState: validateAppUpdateState } = require("./app-update.cjs");
 const { downloadUpdate, replacedFile } = require("./app-install.cjs");
+const { createSync } = require("./sync.cjs");
+const syncData = require("./sync-data.cjs");
 const pkg = require("../package.json");
 const enginePath = app.isPackaged
   ? path.join(process.resourcesPath, "engine", "tokscale.exe")
@@ -54,6 +56,7 @@ let window,
   upstreamMonitor,
   appUpdate,
   appWatcher,
+  sync,
   claudeRequests,
   claudeDisconnecting = false,
   quitting = false,
@@ -358,6 +361,37 @@ function run(input) {
   }
   return task;
 }
+// The engine's unfiltered graph for this computer's own home folder.
+async function readGraph(args) {
+  const dir = await fs.mkdtemp(
+    path.join(app.getPath("temp"), "tokscale-desktop-graph-"),
+  );
+  try {
+    const output = path.join(dir, "graph.json");
+    const result = await run(["graph", ...args, "--output", output]);
+    if (result.code !== 0)
+      throw new Error(
+        result.stderr || result.stdout || "Graph export failed",
+      );
+    const stat = await fs.stat(output);
+    if (stat.size > 64 * 1024 * 1024)
+      throw new Error("Graph data exceeds 64 MB");
+    return JSON.parse(await fs.readFile(output, "utf8"));
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+}
+// Usage from the user's other computers that belongs in this report, or null
+// when the report is this computer's alone.
+function syncedUsage(args, selected) {
+  if (selected !== undefined && typeof selected !== "string")
+    throw new Error("Invalid computer");
+  const filter = syncData.reportFilter(args);
+  if (!sync || !filter.local) return null;
+  const { includeLocal, days } = sync.extra(selected || "all");
+  const extra = syncData.filterDays(days, filter);
+  return { includeLocal, extra, changes: !includeLocal || Object.keys(extra).length > 0 };
+}
 function send(channel, payload) {
   if (window && !window.isDestroyed() && !window.webContents.isDestroyed())
     window.webContents.send("tokscale:" + channel, payload);
@@ -538,31 +572,45 @@ function wireApi() {
     terminalAvailable: Boolean(pty),
     settingsWarning,
   }));
-  handle("run", run);
+  handle("run", (input, selected) => {
+    const task = run(input);
+    const args = security.args(input);
+    const kind = syncData.reportKind(args);
+    // Anything sync cannot add to is the engine's own run, shared as before.
+    if (!kind) return task;
+    return task.then((result) => {
+      const usage = result.code === 0 && syncedUsage(args, selected);
+      if (!usage?.changes) return result;
+      // A report the engine printed but this cannot read is passed on untouched.
+      try {
+        const report = JSON.parse(result.stdout);
+        const merged = kind === "monthly"
+          ? syncData.mergeMonthly(report, usage.extra, usage)
+          : kind === "models"
+            ? syncData.mergeModels(report, usage.extra, usage)
+            : usage.includeLocal ? report : syncData.emptyReport(report);
+        return { ...result, stdout: JSON.stringify(merged) };
+      } catch {
+        return result;
+      }
+    });
+  });
+  handle("syncStatus", () => sync.status());
+  handle("syncNow", () => sync.sync());
+  handle("syncConnect", (input) => sync.connect(input));
+  handle("syncRename", (name) => sync.rename(name));
+  handle("syncDisconnect", () => sync.disconnect());
+  handle("syncRemoveDevice", (id) => sync.removeDevice(id));
   handle("cancelRuns", () => {
     for (const child of runs) child.kill();
   });
-  handle("getGraph", async (input) => {
+  handle("getGraph", async (input, selected) => {
     const args = security.args(input);
     if (args.some((arg) => arg === "--output" || arg.startsWith("--output=")))
       throw new Error("Graph output is managed by the desktop app");
-    const dir = await fs.mkdtemp(
-      path.join(app.getPath("temp"), "tokscale-desktop-graph-"),
-    );
-    try {
-      const output = path.join(dir, "graph.json");
-      const result = await run(["graph", ...args, "--output", output]);
-      if (result.code !== 0)
-        throw new Error(
-          result.stderr || result.stdout || "Graph export failed",
-        );
-      const stat = await fs.stat(output);
-      if (stat.size > 64 * 1024 * 1024)
-        throw new Error("Graph data exceeds 64 MB");
-      return JSON.parse(await fs.readFile(output, "utf8"));
-    } finally {
-      await fs.rm(dir, { recursive: true, force: true });
-    }
+    const graph = await readGraph(args);
+    const usage = syncedUsage(args, selected);
+    return usage?.changes ? syncData.mergeGraph(graph, usage.extra, usage) : graph;
   });
   handle("startTerminal", async (options) => {
     if (!pty)
@@ -963,6 +1011,15 @@ else {
           else if (Notification.isSupported()) new Notification({ title, body, icon: iconPath }).show();
         },
       });
+      sync = createSync({
+        dir: app.getPath("userData"),
+        safeStorage,
+        hostname: os.hostname(),
+        getGraph: () => readGraph([]),
+        // Synthetic checks talk to an in-memory store, never the network.
+        ...(smoke ? { fetchImpl: require("./ui-checks.cjs").syntheticSyncStore() } : {}),
+        onStatus: (status, changed) => send("syncStatus", { ...status, changed }),
+      });
       await createWindow();
       mini = createMini({
         BrowserWindow,
@@ -1003,6 +1060,7 @@ else {
       monitor.start();
       if (preferences.upstreamNotifications !== false) upstreamMonitor.start();
       if (!smoke && preferences.appUpdateChecks !== false) appUpdate.start();
+      sync.start();
       retireReplacedBuild();
       if (miniEnabled() && shouldOpenOnStartup(preferences)) mini.show();
       if (preferences.miniOnAiApps !== false) appWatcher.start();
@@ -1027,6 +1085,7 @@ else {
     monitor?.stop();
     upstreamMonitor?.stop();
     appUpdate?.stop();
+    sync?.stop();
     appWatcher?.stop();
     for (const notice of upstreamNotices) notice.close();
     upstreamNotices.clear();

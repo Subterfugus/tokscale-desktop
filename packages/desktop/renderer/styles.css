@@ -2007,3 +2007,40 @@ tbody tr:last-child td {
     transition: none !important;
   }
 }
+.sync-form {
+  display: grid;
+  gap: 10px;
+  max-width: 520px;
+  margin-top: 12px;
+}
+.sync-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12.5px;
+}
+.setting-row.sync-devices-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+.sync-devices {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.sync-devices li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  font-size: 13px;
+}
+.sync-devices small {
+  display: block;
+  color: var(--text-3);
+  font-size: 12px;
+}

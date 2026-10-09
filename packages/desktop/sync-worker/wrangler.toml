@@ -1,0 +1,16 @@
+# Deploys the private snapshot store for Tokscale Desktop's sync.
+# Nothing here identifies an account: the database is created on first deploy,
+# the access token is a secret, and a custom domain is passed on the command
+# line. See README.md in this folder.
+name = "tokscale-sync"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+workers_dev = false
+preview_urls = false
+
+[[d1_databases]]
+binding = "DB"
+database_name = "tokscale-sync"
+
+[observability]
+enabled = false

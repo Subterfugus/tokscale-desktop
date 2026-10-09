@@ -154,6 +154,7 @@ export function Overview({
   clientIds = [],
   openModels,
   tokenTypes = ALL_TOKEN_TYPES,
+  synced = false,
 }) {
   const models = useReport(["models", "--json", ...args], epoch),
     graph = useReport(args, epoch, true, true),
@@ -323,8 +324,10 @@ export function Overview({
           )}
       </Card>
       <p className="footnote">
-        Read from local usage records on this machine. Estimates can differ from
-        your bill.
+        {synced
+          ? "Read from local usage records on this computer and the daily totals synced from your others."
+          : "Read from local usage records on this machine."}{" "}
+        Estimates can differ from your bill.
       </p>
     </ReportState>
   );
@@ -490,7 +493,7 @@ export function Models({ args, epoch, refresh, search = "", tokenTypes = ALL_TOK
   );
 }
 
-export function Sessions({ args, epoch, refresh, tokenTypes = ALL_TOKEN_TYPES }) {
+export function Sessions({ args, epoch, refresh, tokenTypes = ALL_TOKEN_TYPES, synced = false }) {
   const [view, setView] = useState("sessions"),
     [merge, setMerge] = useState(false),
     [titles, setTitles] = useState({ titles: {} });
@@ -606,6 +609,7 @@ export function Sessions({ args, epoch, refresh, tokenTypes = ALL_TOKEN_TYPES })
           {sessions
             ? "Saved chat names are shown when available."
             : "A workspace is a folder and can contain several sessions."}
+          {synced ? " Sessions and workspaces are listed for this computer only." : ""}
           {titles.warning ? ` Saved chat titles: ${titles.warning}` : ""}
         </p>
       </ReportState>
@@ -626,6 +630,7 @@ export function ActivityView({
   setClient,
   clientIds = [],
   tokenTypes = ALL_TOKEN_TYPES,
+  synced = false,
 }) {
   const [mode, setMode] = useState("daily"),
     [metric, setMetric] = useState("cost"),
@@ -703,7 +708,7 @@ export function ActivityView({
           title={`${MODES.find(([id]) => id === mode)[1]} ${metric === "cost" ? "cost" : "tokens"}`}
           description={
             mode === "hourly"
-              ? "Hourly reports leave out reasoning tokens."
+              ? `Hourly reports leave out reasoning tokens${synced ? " and cover this computer only" : ""}.`
               : undefined
           }
           action={

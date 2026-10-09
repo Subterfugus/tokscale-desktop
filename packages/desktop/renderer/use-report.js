@@ -1,14 +1,16 @@
-import { useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import { safeMessage } from "./format.js";
 
 export const api = window.tokscale;
 const cache = new Map();
+// Which computer's usage the report pages show: "all" or a synced computer's id.
+export const ReportComputer = createContext("all");
 
-async function jsonRun(args) {
-  const r = await api.run([
-    "--no-spinner",
-    ...args.filter((arg) => arg !== "--no-spinner"),
-  ]);
+async function jsonRun(args, computer) {
+  const r = await api.run(
+    ["--no-spinner", ...args.filter((arg) => arg !== "--no-spinner")],
+    computer,
+  );
   if (r.code !== 0)
     throw new Error(
       safeMessage(
@@ -25,7 +27,8 @@ async function jsonRun(args) {
 }
 
 export function useReport(args, epoch, enabled = true, graph = false) {
-  const key = JSON.stringify([graph, args]);
+  const computer = useContext(ReportComputer);
+  const key = JSON.stringify([graph, args, computer]);
   const [state, setState] = useState({
     key,
     data: null,
@@ -43,7 +46,7 @@ export function useReport(args, epoch, enabled = true, graph = false) {
     setState({ key, data: cached?.data || null, loading: true, error: null });
     let task = cached?.epoch === epoch ? cached?.promise : null;
     if (!task) {
-      task = graph ? api.getGraph(args) : jsonRun(args);
+      task = graph ? api.getGraph(args, computer) : jsonRun(args, computer);
       cache.set(key, { epoch, promise: task, data: cached?.data });
       if (cache.size > 40) {
         const oldest = [...cache].find(

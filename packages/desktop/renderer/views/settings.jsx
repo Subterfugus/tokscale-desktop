@@ -6,6 +6,7 @@ import { api } from "../use-report.js";
 import { Button, Card, Notice, Select } from "../ui.jsx";
 import { THEMES, resolveTheme } from "../themes.js";
 import { dateTime, safeMessage } from "../format.js";
+import { SyncCard } from "./sync.jsx";
 
 function Row({ title, description, children }) {
   return (
@@ -63,7 +64,7 @@ function ThemeButton({ name, active, onClick, colors, split }) {
   );
 }
 
-export function SettingsView({ settings, setSettings, info, toCommand, onSaved }) {
+export function SettingsView({ settings, setSettings, info, toCommand, onSaved, sync, setSync }) {
   const [saved, setSaved] = useState(false),
     [error, setError] = useState(""),
     [upstream, setUpstream] = useState(null),
@@ -270,6 +271,7 @@ export function SettingsView({ settings, setSettings, info, toCommand, onSaved }
           />
         </Row>
       </Card>
+      <SyncCard sync={sync} setSync={setSync} />
       <Card title="App updates">
         <Row
           title="Check for new versions"

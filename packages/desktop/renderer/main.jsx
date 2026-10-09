@@ -20,7 +20,7 @@ import {
   X,
 } from "lucide-react";
 import "./styles.css";
-import { api, useReport } from "./use-report.js";
+import { api, ReportComputer, useReport } from "./use-report.js";
 import { Button, IconButton, Notice, Popover, Select, Toaster } from "./ui.jsx";
 import { brand, clock, dateLabel, updateLabel } from "./format.js";
 import {
@@ -94,6 +94,8 @@ function App() {
     }),
     [period, setPeriod] = useState("month"),
     [client, setClient] = useState("all"),
+    [computer, setComputer] = useState("all"),
+    [syncState, setSyncState] = useState(null),
     [since, setSince] = useState(""),
     [until, setUntil] = useState(""),
     [year, setYear] = useState(""),
@@ -154,6 +156,22 @@ function App() {
     setLastRefresh(new Date());
   }, []);
   const refreshable = page !== "commands" && page !== "settings";
+  // Reports redraw when another computer's usage arrives or leaves.
+  useEffect(() => {
+    let alive = true, revision = 0;
+    api.syncStatus().then((status) => { if (alive && revision === 0) setSyncState(status); }).catch(() => {});
+    const off = api.onSyncStatus((status) => {
+      revision++;
+      if (!alive) return;
+      setSyncState(status);
+      if (status.changed) refresh();
+    });
+    return () => { alive = false; off(); };
+  }, [refresh]);
+  // A custom report home is another folder's data and is never combined.
+  const computers = settings.home ? [] : syncState?.devices || [];
+  const computerChoice =
+    computers.length > 1 && computers.some((c) => c.id === computer) ? computer : "all";
   useEffect(() => {
     const shortcuts = (event) => {
       // Inside the terminal these keys belong to the running program.
@@ -507,6 +525,21 @@ function App() {
                 )}
               </Popover>
             </div>
+            {computers.length > 1 && (
+              <Select
+                className="client-select"
+                label="Filter by computer"
+                value={computerChoice}
+                onChange={(e) => setComputer(e.target.value)}
+              >
+                <option value="all">All computers</option>
+                {computers.map((c) => (
+                  <option value={c.id} key={c.id}>
+                    {c.self ? `${c.name} (this computer)` : c.name}
+                  </option>
+                ))}
+              </Select>
+            )}
             <Select
               className="client-select"
               label="Filter by client"
@@ -544,7 +577,7 @@ function App() {
                 <i className="skeleton-block" />
               </div>
             ) : (
-              <>
+              <ReportComputer.Provider value={computerChoice}>
                 {page === "overview" && (
                   <Overview
                     args={filterArgs}
@@ -556,6 +589,7 @@ function App() {
                     clientIds={clients.map((c) => c.client)}
                     openModels={openModels}
                     tokenTypes={tokenTypes}
+                    synced={computers.length > 1}
                   />
                 )}
                 {page === "models" && (
@@ -572,6 +606,7 @@ function App() {
                     args={filterArgs}
                     epoch={epoch}
                     refresh={refresh}
+                    synced={computers.length > 1}
                     focusDay={focusDay}
                     setClient={setClient}
                     clientIds={clients.map((c) => c.client)}
@@ -584,6 +619,7 @@ function App() {
                     epoch={epoch}
                     refresh={refresh}
                     tokenTypes={tokenTypes}
+                    synced={computers.length > 1}
                   />
                 )}
                 {page === "insights" && (
@@ -614,6 +650,8 @@ function App() {
                     }
                     info={info}
                     toCommand={toCommand}
+                    sync={syncState}
+                    setSync={setSyncState}
                   />
                 )}
                 {/* Stays mounted so a running TUI survives navigation. */}
@@ -624,7 +662,7 @@ function App() {
                     onCommandConsumed={() => setCommand("")}
                   />
                 </div>
-              </>
+              </ReportComputer.Provider>
             )}
           </div>
         </div>

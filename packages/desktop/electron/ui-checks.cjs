@@ -3,9 +3,36 @@ const path = require("node:path");
 const assert = require("node:assert/strict");
 const { nativeHitTest } = require("./native-hit-test.cjs");
 
+// A stand-in sync store holding one other computer, for the synthetic checks.
+function syntheticSyncStore() {
+  const devices = new Map([["synthetic-laptop-0001", {
+    name: "Synthetic laptop",
+    updatedAt: "2026-09-21T00:00:00.000Z",
+    days: { "2026-09-20": [{
+      client: "codex", modelId: "gpt-5.5", providerId: "openai",
+      tokens: { input: 1000, output: 200, cacheRead: 0, cacheWrite: 0, reasoning: 0 },
+      cost: 12.34, messages: 7,
+    }] },
+  }]]);
+  const reply = (status, value) => ({ ok: status < 400, status, text: async () => JSON.stringify(value), json: async () => value });
+  return async (url, options = {}) => {
+    const { pathname } = new URL(url), id = pathname.split("/")[3], method = options.method || "GET";
+    if (options.headers?.Authorization !== "Bearer synthetic-sync-token-0123456789abcdef") return reply(401, { error: "Unauthorized" });
+    if (pathname === "/v1/devices")
+      return reply(200, { devices: [...devices].map(([key, device]) => ({ id: key, name: device.name, updatedAt: device.updatedAt })) });
+    if (method === "PUT") {
+      const updatedAt = new Date().toISOString();
+      devices.set(id, { ...JSON.parse(options.body), updatedAt });
+      return reply(200, { id, updatedAt });
+    }
+    if (method === "DELETE") return devices.delete(id), reply(200, { removed: id });
+    return devices.has(id) ? reply(200, { id, ...devices.get(id) }) : reply(404, { error: "Unknown computer" });
+  };
+}
+
 // Runs only in --desktop-smoke, against generated local sessions without auth.
 // These exercise the actual bundled React renderer and native bridge.
-async function runUiChecks({ window, mini, output, terminalCount }) {
+async function runUiChecks({ window, mini, output, terminalCount, fixtureHome }) {
   const checks = [];
   const exec = async (fn, arg) => {
     const result = await window.webContents.executeJavaScript(
@@ -556,6 +583,59 @@ async function runUiChecks({ window, mini, output, terminalCount }) {
   await exec(() => document.querySelector('input[aria-label="Upstream update notifications"]').click());
   await wait(async () => (await window.tokscale.getSettings()).upstreamNotifications === true);
   checks.push("Upstream updates are enabled by default; manual checks show a saved baseline and the notification switch saves");
+  // Sync never combines a custom report home, so these run on the default one.
+  await click(".setting-control button", "Reset");
+  await wait(async () => (await window.tokscale.getSettings()).home === "", null, "Report home was not reset");
+  const syncCard = () => [...document.querySelectorAll(".panel")].find((card) => card.innerText.startsWith("Sync across computers"))?.innerText || "";
+  assert.match(await exec(syncCard), /never leave this computer/);
+  assert.equal(await exec(() => document.querySelector('input[aria-label="Sync access token"]').type), "password");
+  await setInput('input[aria-label="Sync address"]', "https://sync.invalid");
+  await setInput('input[aria-label="Sync access token"]', "wrong-token-wrong-token-wrong-token-0");
+  await click(".sync-form button", "Connect");
+  await wait(() => document.querySelector(".settings")?.innerText.includes("rejected this access token"), null, "A wrong sync token was not reported");
+  await setInput('input[aria-label="Sync access token"]', "synthetic-sync-token-0123456789abcdef");
+  await setInput(`input[aria-label="This computer's name"]`, "Synthetic desk");
+  await click(".sync-form button", "Connect");
+  await wait(() => document.querySelectorAll(".sync-devices li").length === 2, null, "Sync did not list both computers");
+  const computers = await exec(() => document.querySelector(".sync-devices").innerText);
+  assert.match(computers, /Synthetic desk[\s\S]*this computer[\s\S]*10 days of usage through Oct 3/);
+  assert.match(computers, /Synthetic laptop[\s\S]*1 day of usage through Sep 20/);
+  assert.equal(await exec(() => document.querySelector('input[aria-label="Sync access token"]') === null), true, "The token field stayed on screen after connecting");
+  await exec(() => document.querySelector(".sync-devices").closest(".panel").scrollIntoView({ block: "center" }));
+  await snapshot("sync");
+  await nav("Overview");
+  await click(".period-tabs button", "All time");
+  const computer = 'select[aria-label="Filter by computer"]';
+  await wait((computer) => document.querySelector(computer)?.options.length === 3, computer, "Computer filter did not appear");
+  // 160 messages and $25.03 here, 7 messages and $12.34 on the other computer.
+  await wait(() => /\$37\.37/.test(document.querySelector(".metrics")?.innerText) && document.querySelector(".metrics").innerText.includes("167"), null, "Overview did not add the other computer");
+  assert.match(await exec(() => document.querySelector(".overview-grid").innerText), /Sep 20/);
+  await snapshot("sync-overview");
+  const choose = (value) => exec(({ computer, value }) => {
+    const select = document.querySelector(computer);
+    select.value = value === "self" ? [...select.options].find((option) => option.text.includes("this computer")).value : value;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  }, { computer, value });
+  await choose("synthetic-laptop-0001");
+  await wait(() => /\$12\.34/.test(document.querySelector(".metrics")?.innerText), null, "Overview did not narrow to the other computer");
+  await nav("Insights");
+  await wait(() => /Active days\s*1\b/.test(document.querySelector(".metrics")?.innerText), null, "Insights did not narrow to the other computer");
+  await nav("Sessions");
+  await wait(() => !document.querySelector(".content")?.innerText.includes("Atlas planning"), null, "Sessions listed this computer's chats under another computer");
+  await choose("self");
+  await wait(() => document.querySelector(".content")?.innerText.includes("Atlas planning"), null, "Sessions did not return for this computer");
+  await nav("Overview");
+  await wait(() => /\$25\.03/.test(document.querySelector(".metrics")?.innerText), null, "This computer's own totals changed");
+  await choose("all");
+  await wait(() => /\$37\.37/.test(document.querySelector(".metrics")?.innerText));
+  await nav("Settings");
+  await click(".setting-control button", "Disconnect");
+  await wait(() => Boolean(document.querySelector(".sync-form")), null, "Disconnect did not return to the connection form");
+  await nav("Overview");
+  await wait(() => /\$25\.03/.test(document.querySelector(".metrics")?.innerText) && !document.querySelector('select[aria-label="Filter by computer"]'), null, "Disconnecting left synced usage in the reports");
+  await exec((home) => window.tokscale.saveSettings({ home }), fixtureHome);
+  await nav("Settings");
+  checks.push("Sync connects with an encrypted token, adds another computer to reports, filters by computer, and disconnects cleanly");
   if (mini) {
     const inMini = (code) => mini.webContents.executeJavaScript(code, true);
     const until = async (code, message) => {
@@ -679,4 +759,4 @@ async function runUiChecks({ window, mini, output, terminalCount }) {
     fixture: "Generated Codex/Claude sessions; no real credentials",
   };
 }
-module.exports = { runUiChecks };
+module.exports = { runUiChecks, syntheticSyncStore };
