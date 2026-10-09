@@ -76,7 +76,8 @@ function fixture(savedBounds, extra = {}) {
       this.webContents = new EventEmitter();
       this.webContents.setWindowOpenHandler = () => {};
     }
-    setAlwaysOnTop() {}
+    setAlwaysOnTop(...level) { this.level = level; }
+    moveTop() { this.raised = (this.raised || 0) + 1; }
     setBackgroundColor() {}
     setOpacity(value) { this.opacity = value; }
     setResizable(value) { this.resizable = value; }
@@ -96,17 +97,20 @@ function fixture(savedBounds, extra = {}) {
   return { mini, saved, state, visibility, screen, setAreas: (next) => { areas = next; } };
 }
 
-test("the window is see-through at the saved opacity and solid under the pointer", () => {
+test("showing the window again lifts it back above other apps", () => {
+  const { mini } = fixture();
+  assert.deepEqual(mini.window.level, [true, "pop-up-menu"]);
+  const before = mini.window.raised || 0;
+  mini.show();
+  assert.equal(mini.window.raised, before + 1);
+  assert.equal(mini.window.inactive, true);
+});
+
+test("the window is see-through at the saved opacity", () => {
   const { mini, state } = fixture(undefined, { opacity: 60 });
   assert.equal(mini.window.opacity, 0.6);
-  mini.setHover(true);
-  assert.equal(mini.window.opacity, 1);
-  mini.setHover(false);
   state.opacity = 20;
   mini.applyOpacity();
-  assert.equal(mini.window.opacity, 0.3);
-  mini.setHover(true);
-  mini.hide();
   assert.equal(mini.window.opacity, 0.3);
   assert.equal(fixture().mini.window.opacity, 1);
 });

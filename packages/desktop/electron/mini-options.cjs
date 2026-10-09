@@ -16,7 +16,7 @@ const DEFAULT_BUBBLE = "scale";
 const bubbleId = (value) => (BUBBLES.some((bubble) => bubble.id === value) ? value : DEFAULT_BUBBLE);
 
 const MIN_OPACITY = 30;
-// Percent the mini window is drawn at when the pointer is elsewhere.
+// Percent the mini window is drawn at.
 function opacityPercent(value) {
   const number = Number(value);
   return Number.isFinite(number) ? Math.min(100, Math.max(MIN_OPACITY, Math.round(number))) : 100;

@@ -130,11 +130,16 @@ function createMini({ BrowserWindow, screen, preloadPath, htmlPath, iconPath, sm
   let bubbleOrigin = null;
   let changingBounds = false;
   let transitions = Promise.resolve();
-  let hovered = false;
   const alive = () => Boolean(win) && !win.isDestroyed();
-  // See-through when the pointer is elsewhere, solid while it is over the window.
-  const opacity = () => (hovered ? 1 : opacityPercent(getState().opacity) / 100);
-  const applyOpacity = () => { if (alive()) win.setOpacity?.(opacity()); };
+  const applyOpacity = () => { if (alive()) win.setOpacity?.(opacityPercent(getState().opacity) / 100); };
+  // Electron parks "floating" windows directly behind the Windows taskbar, and
+  // when the taskbar leaves the top band the window sinks under every other
+  // app with it. This level stays above ordinary windows on its own.
+  const raise = () => {
+    if (!alive()) return;
+    win.setAlwaysOnTop(true, "pop-up-menu");
+    win.moveTop?.();
+  };
   const background = () => getState().theme.colors.page;
   const areas = () => screen.getAllDisplays().map(display => display.workArea);
   const primary = () => screen.getPrimaryDisplay().workArea;
@@ -250,13 +255,16 @@ function createMini({ BrowserWindow, screen, preloadPath, htmlPath, iconPath, sm
     });
     if (micro) applyBounds(initialBounds);
     applyOpacity();
-    win.setAlwaysOnTop(true, "floating");
+    win.setAlwaysOnTop(true, "pop-up-menu");
     win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     win.webContents.on("will-navigate", (event, url) => {
       if (url !== htmlUrl) event.preventDefault();
     });
     win.once("ready-to-show", () => {
-      if (!smoke && alive() && !destroyed && wantedVisible) win.showInactive();
+      if (!smoke && alive() && !destroyed && wantedVisible) {
+        win.showInactive();
+        raise();
+      }
     });
     win.on("move", scheduleBoundsSave);
     win.on("resize", scheduleBoundsSave);
@@ -335,11 +343,10 @@ function createMini({ BrowserWindow, screen, preloadPath, htmlPath, iconPath, sm
       if (smoke) return;
       recoverBounds();
       win.showInactive();
+      raise();
     },
     hide() {
       wantedVisible = false;
-      hovered = false;
-      applyOpacity();
       if (alive()) win.hide();
     },
     toggle() {
@@ -356,10 +363,6 @@ function createMini({ BrowserWindow, screen, preloadPath, htmlPath, iconPath, sm
       if (alive()) win.setBackgroundColor(background());
     },
     applyOpacity,
-    setHover(value) {
-      hovered = Boolean(value);
-      applyOpacity();
-    },
     destroy() {
       destroyed = true;
       wantedVisible = false;

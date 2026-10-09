@@ -373,7 +373,7 @@ export function SettingsView({ settings, setSettings, info, toCommand, onSaved, 
         </Row>
         <Row
           title="Mini window opacity"
-          description="How solid the mini window and its bubble look while the pointer is elsewhere. They turn fully solid when you point at them."
+          description="How solid the mini window and its bubble look."
         >
           <div className="range-control">
             <input

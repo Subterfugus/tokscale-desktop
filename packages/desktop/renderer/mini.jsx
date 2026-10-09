@@ -237,21 +237,6 @@ function Mini() {
   const shown = options.orderLimits(limits?.sources, settings.miniLimitOrder).filter(
     (row) => Number.isFinite(row.usedPercent) && !hidden.includes(row.id),
   );
-  // A see-through window turns solid while the pointer is over it.
-  const faded = options.opacityPercent(settings.miniOpacity) < 100;
-  useEffect(() => {
-    if (!faded) return;
-    const root = document.documentElement;
-    const tell = (action) => () => { try { api.miniControl(action)?.catch?.(() => {}); } catch {} };
-    const enter = tell("solid"), leave = tell("faded");
-    root.addEventListener("mouseenter", enter);
-    root.addEventListener("mouseleave", leave);
-    return () => {
-      root.removeEventListener("mouseenter", enter);
-      root.removeEventListener("mouseleave", leave);
-      leave();
-    };
-  }, [faded]);
   const micro = settings.miniMicro === true;
   useEffect(() => {
     document.documentElement.classList.toggle("mini-micro", micro);

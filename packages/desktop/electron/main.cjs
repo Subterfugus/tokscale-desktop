@@ -137,12 +137,13 @@ function savePreferences(patch) {
   });
 }
 // A portable build runs from a temporary folder; the login item must point at
-// the executable the user actually launched. The registry is only touched
-// when the setting is on or has just been turned off.
+// the executable the user actually launched. Each start rewrites it, because a
+// stored path goes stale when an update replaces the file. Later settings
+// changes only touch the registry when the setting actually changes.
 let loginItem = false;
-function applyLoginItem() {
+function applyLoginItem({ startup = false } = {}) {
   const wanted = Boolean(preferences.launchAtLogin);
-  if (!app.isPackaged || smoke || wanted === loginItem) return;
+  if (!app.isPackaged || smoke || (!startup && wanted === loginItem)) return;
   loginItem = wanted;
   app.setLoginItemSettings({
     openAtLogin: wanted,
@@ -747,8 +748,6 @@ function wireApi() {
       if (mini && !mini.isMicro?.()) return Promise.resolve(mini.collapse()).then(() => undefined);
     }
     else if (action === "close") setMiniVisible(false);
-    // The pointer entering or leaving the mini window; it is solid while inside.
-    else if (action === "solid" || action === "faded") mini?.setHover?.(action === "solid");
     else if (action === "micro") return mini?.collapse();
     else if (action === "expand") return mini?.expand();
     // The widget never supplies a link or a file; main decides both.
@@ -1037,7 +1036,8 @@ else {
         }),
       });
       appWatcher = createAppWatcher({
-        onOpen: () => { if (miniEnabled() && !mini.isVisible()) mini.show(); },
+        // Also brings an already shown mini window back above other apps.
+        onOpen: () => { if (miniEnabled()) mini.show(); },
         onStatus: status => send("miniWatchStatus", status),
       });
       if (smoke) {
@@ -1055,7 +1055,7 @@ else {
       }
       // Without a tray icon there would be no way back to a hidden window.
       if (startHidden && !tray) window.show();
-      applyLoginItem();
+      applyLoginItem({ startup: true });
       refreshTray();
       monitor.start();
       if (preferences.upstreamNotifications !== false) upstreamMonitor.start();
