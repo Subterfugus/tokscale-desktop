@@ -101,3 +101,23 @@ test("install adds the Stop hook once and keeps existing settings", () => {
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("the hook replaces an outdated copy of the script with the published one", async () => {
+  const { refresh } = await import("../cloud-sync/tokscale-cloud-sync.mjs");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tokscale-cloud-sync-"));
+  try {
+    const file = path.join(dir, "copy.mjs");
+    const published = 'export const DEVICE_ID = "claude-cloud"; // new';
+    fs.writeFileSync(file, "old");
+    const serve = (body, status = 200) => async () => new Response(body, { status });
+    assert.equal(await refresh({ file, fetchImpl: serve("<html>not the script</html>") }), false);
+    assert.equal(await refresh({ file, fetchImpl: serve(published, 404) }), false);
+    assert.equal(await refresh({ file, fetchImpl: async () => { throw new Error("offline"); } }), false);
+    assert.equal(fs.readFileSync(file, "utf8"), "old");
+    assert.equal(await refresh({ file, fetchImpl: serve(published) }), true);
+    assert.equal(fs.readFileSync(file, "utf8"), published);
+    assert.equal(await refresh({ file, fetchImpl: serve(published) }), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
