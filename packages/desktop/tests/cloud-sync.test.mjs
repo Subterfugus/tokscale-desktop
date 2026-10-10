@@ -107,17 +107,27 @@ test("the hook replaces an outdated copy of the script with the published one", 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tokscale-cloud-sync-"));
   try {
     const file = path.join(dir, "copy.mjs");
-    const published = 'export const DEVICE_ID = "claude-cloud"; // new';
-    fs.writeFileSync(file, "old");
+    const published = 'export const VERSION = 5;\nexport const DEVICE_ID = "claude-cloud"; // new';
+    fs.writeFileSync(file, 'export const VERSION = 4;\nexport const DEVICE_ID = "claude-cloud"; // old');
     const serve = (body, status = 200) => async () => new Response(body, { status });
     assert.equal(await refresh({ file, fetchImpl: serve("<html>not the script</html>") }), false);
     assert.equal(await refresh({ file, fetchImpl: serve(published, 404) }), false);
     assert.equal(await refresh({ file, fetchImpl: async () => { throw new Error("offline"); } }), false);
-    assert.equal(fs.readFileSync(file, "utf8"), "old");
+    const older = 'export const VERSION = 3;\nexport const DEVICE_ID = "claude-cloud";';
+    assert.equal(await refresh({ file, fetchImpl: serve(older) }), false, "never rolls back");
+    assert.match(fs.readFileSync(file, "utf8"), /VERSION = 4/);
     assert.equal(await refresh({ file, fetchImpl: serve(published) }), true);
     assert.equal(fs.readFileSync(file, "utf8"), published);
     assert.equal(await refresh({ file, fetchImpl: serve(published) }), false);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("npm reaches the registry through the proxy", async () => {
+  const { npmEnv } = await import("../cloud-sync/tokscale-cloud-sync.mjs");
+  const env = npmEnv({ npm_config_noproxy: "localhost,registry.npmjs.org,pypi.org", NO_PROXY: "registry.npmjs.org", PATH: "/bin" });
+  assert.equal(env.npm_config_noproxy, "localhost,pypi.org");
+  assert.equal(env.NO_PROXY, "");
+  assert.equal(env.PATH, "/bin");
 });

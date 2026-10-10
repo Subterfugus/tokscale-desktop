@@ -22,6 +22,9 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Raise on every change: the hook only replaces its copy with a newer one, so
+// a stale cached download can never roll it back.
+export const VERSION = 4;
 // Keep in step with the engine Tokscale Desktop bundles (package.json).
 export const ENGINE = "tokscale@4.17.0";
 export const DEVICE_ID = "claude-cloud";
@@ -74,6 +77,19 @@ export function settings(env = process.env) {
 // Runs the engine with its own settings folder, so a pinned timezone applies
 // and nothing is written into the session's own config. `.claude` points at the
 // real one so the engine reads this machine's transcripts.
+// Cloud machines list the npm registry as a direct connection, which some
+// network policies cannot make; sending it through the proxy works in both.
+export function npmEnv(env = process.env) {
+  const result = { ...env, npm_config_update_notifier: "false" };
+  for (const key of ["npm_config_noproxy", "NO_PROXY", "no_proxy"])
+    if (result[key])
+      result[key] = result[key]
+        .split(",")
+        .filter((host) => host.trim() !== "registry.npmjs.org")
+        .join(",");
+  return result;
+}
+
 function runEngine(options, home = os.homedir()) {
   const state = path.join(home, ".cache", "tokscale-cloud-sync");
   const engineHome = path.join(state, "home");
@@ -82,18 +98,18 @@ function runEngine(options, home = os.homedir()) {
   const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(home, ".claude");
   if (!fs.existsSync(link)) fs.symlinkSync(claudeDir, link);
   const env = {
-    ...process.env,
+    ...npmEnv(),
     HOME: engineHome,
     CLAUDE_CONFIG_DIR: link,
     npm_config_cache: process.env.npm_config_cache || path.join(home, ".npm"),
-    npm_config_update_notifier: "false",
   };
   const npx = (args) => spawnSync("npx", ["-y", ENGINE, ...args], { cwd: state, env, encoding: "utf8", timeout: 240000 });
   const marker = path.join(state, "timezone");
   if (options.timezone && !fs.existsSync(marker)) {
     // The engine fixes the day boundary on first use, so the zone must be set before any report.
     const result = npx(["config", "set", "timezone", options.timezone]);
-    if (result.status !== 0) throw new Error(`Could not set the timezone: ${(result.stderr || "").split("\n")[0]}`);
+    if (result.status !== 0)
+      throw new Error(`Could not run the engine: ${(result.stderr || "timed out").split("\n")[0]}. Check that registry.npmjs.org is reachable.`);
     fs.writeFileSync(marker, options.timezone);
   }
   const output = path.join(state, "graph.json");
@@ -194,7 +210,9 @@ export async function refresh({ fetchImpl = fetch, file = SCRIPT, source = proce
   } catch {
     return false;
   }
-  if (!latest.includes('export const DEVICE_ID = "claude-cloud"') || latest === fs.readFileSync(file, "utf8")) return false;
+  const version = (text) => Number(/^export const VERSION = (\d+);$/m.exec(text)?.[1] || 0);
+  if (!latest.includes('export const DEVICE_ID = "claude-cloud"')) return false;
+  if (version(latest) <= version(fs.readFileSync(file, "utf8"))) return false;
   const temp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(temp, latest);
   fs.renameSync(temp, file);
@@ -206,7 +224,7 @@ async function main(mode) {
     const { file, added } = install();
     log(added ? `added the upload hook to ${file}` : `the upload hook is already in ${file}`);
     // Fetches the engine now, during setup, so the first upload is quick.
-    const warm = spawnSync("npx", ["-y", ENGINE, "--version"], { cwd: os.tmpdir(), encoding: "utf8", timeout: 240000 });
+    const warm = spawnSync("npx", ["-y", ENGINE, "--version"], { cwd: os.tmpdir(), env: npmEnv(), encoding: "utf8", timeout: 240000 });
     log(warm.status === 0 ? `engine ready: ${warm.stdout.trim()}` : `could not fetch the engine yet: ${(warm.stderr || "").trim().split("\n").at(-1)}`);
     return;
   }
