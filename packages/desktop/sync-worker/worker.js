@@ -1,10 +1,13 @@
 // Private store for Tokscale Desktop's per-computer usage snapshots.
 //
 // Each computer keeps one snapshot of its own daily totals here and reads the
-// others. Every request must carry the shared access token, which is a Worker
+// others. A source with many short-lived machines, such as Claude Code cloud
+// sessions, instead adds one part per session under a single computer id, and
+// readers see the parts added together. Every request must carry the shared access token, which is a Worker
 // secret (SYNC_TOKEN) and never part of this repository.
 
 const DEVICE_ID = /^[a-z0-9][a-z0-9-]{7,63}$/;
+const SESSION_ID = /^[A-Za-z0-9_-]{8,100}$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const TOKEN_FIELDS = ["input", "output", "cacheRead", "cacheWrite", "reasoning"];
 const MAX_BODY = 8 * 1024 * 1024;
@@ -13,6 +16,7 @@ const MAX_ROWS_PER_DAY = 400;
 // A D1 row holds at most 2 MB; one year of one computer stays well under it.
 const MAX_YEAR_BYTES = 1_800_000;
 const MAX_DEVICES = 50;
+const MAX_SESSIONS = 5000;
 
 const json = (value, status = 200) =>
   new Response(JSON.stringify(value), {
@@ -96,6 +100,9 @@ async function ensureSchema(db) {
       "CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, updated_at TEXT NOT NULL)",
     ),
     db.prepare(
+      "CREATE TABLE IF NOT EXISTS device_sessions (device_id TEXT NOT NULL, session_id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY (device_id, session_id))",
+    ),
+    db.prepare(
       "CREATE TABLE IF NOT EXISTS device_years (device_id TEXT NOT NULL, year TEXT NOT NULL, hash TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY (device_id, year))",
     ),
   ]);
@@ -111,6 +118,28 @@ async function listDevices(db) {
   });
 }
 
+const rowKey = (row) => `${row.client}\n${row.modelId}\n${row.providerId}`;
+
+// Adds a session's days into `days`, summing rows for the same client, model
+// and provider.
+function addDays(days, extra) {
+  for (const [date, rows] of Object.entries(extra)) {
+    const merged = new Map((days[date] || []).map((row) => [rowKey(row), row]));
+    for (const row of rows) {
+      const current = merged.get(rowKey(row));
+      if (!current) {
+        merged.set(rowKey(row), { ...row, tokens: { ...row.tokens } });
+        continue;
+      }
+      for (const field of TOKEN_FIELDS) current.tokens[field] += row.tokens[field];
+      current.cost += row.cost;
+      current.messages += row.messages;
+    }
+    days[date] = [...merged.values()];
+  }
+  return days;
+}
+
 async function readDevice(db, id) {
   const device = await db
     .prepare("SELECT id, name, updated_at FROM devices WHERE id = ?")
@@ -123,10 +152,16 @@ async function readDevice(db, id) {
     .all();
   const days = {};
   for (const row of results) Object.assign(days, JSON.parse(row.body));
+  const sessions = await db
+    .prepare("SELECT body FROM device_sessions WHERE device_id = ?")
+    .bind(id)
+    .all();
+  for (const row of sessions.results) addDays(days, JSON.parse(row.body));
   return json({ id: device.id, name: device.name, updatedAt: device.updated_at, days });
 }
 
-async function writeDevice(db, id, request) {
+// The request's snapshot, or an error response.
+async function readSnapshot(request) {
   const length = Number(request.headers.get("content-length") || 0);
   if (length > MAX_BODY) return fail(413, "Snapshot is too large");
   const text = await request.text();
@@ -138,26 +173,36 @@ async function writeDevice(db, id, request) {
     return fail(400, "Invalid JSON");
   }
   const snapshot = cleanSnapshot(body);
-  if (typeof snapshot === "string") return fail(400, snapshot);
+  return typeof snapshot === "string" ? fail(400, snapshot) : snapshot;
+}
 
+// An error response when a new computer would go over the limit.
+async function deviceLimit(db, id) {
   const known = await db.prepare("SELECT id FROM devices WHERE id = ?").bind(id).first();
-  if (!known) {
-    const total = await db.prepare("SELECT COUNT(*) AS n FROM devices").first();
-    if (total.n >= MAX_DEVICES) return fail(409, "Too many computers; remove one first");
-  }
+  if (known) return null;
+  const total = await db.prepare("SELECT COUNT(*) AS n FROM devices").first();
+  return total.n >= MAX_DEVICES ? fail(409, "Too many computers; remove one first") : null;
+}
+
+const touchDevice = (db, id, name, updatedAt) =>
+  db
+    .prepare(
+      "INSERT INTO devices (id, name, updated_at) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at",
+    )
+    .bind(id, name, updatedAt);
+
+async function writeDevice(db, id, request) {
+  const snapshot = await readSnapshot(request);
+  if (snapshot instanceof Response) return snapshot;
+  const limited = await deviceLimit(db, id);
+  if (limited) return limited;
   const { results } = await db
     .prepare("SELECT year, hash FROM device_years WHERE device_id = ?")
     .bind(id)
     .all();
   const stored = new Map(results.map((row) => [row.year, row.hash]));
   const updatedAt = new Date().toISOString();
-  const statements = [
-    db
-      .prepare(
-        "INSERT INTO devices (id, name, updated_at) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at",
-      )
-      .bind(id, snapshot.name, updatedAt),
-  ];
+  const statements = [touchDevice(db, id, snapshot.name, updatedAt)];
   // Only years whose contents changed are rewritten; past years rarely do.
   for (const [year, days] of snapshot.years) {
     const body = JSON.stringify(days);
@@ -181,8 +226,42 @@ async function writeDevice(db, id, request) {
   return json({ id, name: snapshot.name, updatedAt });
 }
 
+// Replaces one session's part of a computer's usage. Re-uploading the same
+// session replaces its earlier part, so totals never count a session twice.
+async function writeSession(db, id, sessionId, request) {
+  const snapshot = await readSnapshot(request);
+  if (snapshot instanceof Response) return snapshot;
+  const limited = await deviceLimit(db, id);
+  if (limited) return limited;
+  const known = await db
+    .prepare("SELECT session_id FROM device_sessions WHERE device_id = ? AND session_id = ?")
+    .bind(id, sessionId)
+    .first();
+  if (!known) {
+    const total = await db
+      .prepare("SELECT COUNT(*) AS n FROM device_sessions WHERE device_id = ?")
+      .bind(id)
+      .first();
+    if (total.n >= MAX_SESSIONS) return fail(409, "Too many sessions; remove this computer first");
+  }
+  const days = Object.assign({}, ...snapshot.years.values());
+  const body = JSON.stringify(days);
+  if (body.length > MAX_YEAR_BYTES) return fail(413, "Session usage is too large");
+  const updatedAt = new Date().toISOString();
+  await db.batch([
+    touchDevice(db, id, snapshot.name, updatedAt),
+    db
+      .prepare(
+        "INSERT INTO device_sessions (device_id, session_id, body) VALUES (?, ?, ?) ON CONFLICT(device_id, session_id) DO UPDATE SET body = excluded.body",
+      )
+      .bind(id, sessionId, body),
+  ]);
+  return json({ id, session: sessionId, name: snapshot.name, updatedAt });
+}
+
 async function removeDevice(db, id) {
   await db.batch([
+    db.prepare("DELETE FROM device_sessions WHERE device_id = ?").bind(id),
     db.prepare("DELETE FROM device_years WHERE device_id = ?").bind(id),
     db.prepare("DELETE FROM devices WHERE id = ?").bind(id),
   ]);
@@ -201,10 +280,15 @@ export default {
       await ensureSchema(env.DB);
       if (pathname === "/v1/devices")
         return method === "GET" ? listDevices(env.DB) : fail(405, "Method not allowed");
-      const match = /^\/v1\/devices\/([^/]+)$/.exec(pathname);
+      const match = /^\/v1\/devices\/([^/]+)(?:\/sessions\/([^/]+))?$/.exec(pathname);
       if (!match) return fail(404, "Not found");
-      const id = match[1];
+      const [, id, sessionId] = match;
       if (!DEVICE_ID.test(id)) return fail(400, "Invalid computer id");
+      if (sessionId !== undefined) {
+        if (!SESSION_ID.test(sessionId)) return fail(400, "Invalid session id");
+        if (method === "PUT") return await writeSession(env.DB, id, sessionId, request);
+        return fail(405, "Method not allowed");
+      }
       if (method === "GET") return await readDevice(env.DB, id);
       if (method === "PUT") return await writeDevice(env.DB, id, request);
       if (method === "DELETE") return await removeDevice(env.DB, id);

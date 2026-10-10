@@ -56,6 +56,9 @@ All paths require `Authorization: Bearer <token>`.
 | `GET /v1/devices/:id` | `{ id, name, updatedAt, days }` |
 | `PUT /v1/devices/:id` with `{ name, days }` | Replaces that computer's snapshot |
 | `DELETE /v1/devices/:id` | Removes that computer |
+| `PUT /v1/devices/:id/sessions/:session` with `{ name, days }` | Replaces one session's part of that computer; reading the computer returns its parts added together |
+
+Session parts let short-lived machines, such as Claude Code cloud sessions, share one computer entry; [cloud-sync](../cloud-sync/README.md) uses them.
 
 `days` maps `YYYY-MM-DD` to rows of `{ client, modelId, providerId, tokens: { input, output, cacheRead, cacheWrite, reasoning }, cost, messages }`. Snapshots are stored one row per computer and calendar year, and a year is rewritten only when its contents change.
 

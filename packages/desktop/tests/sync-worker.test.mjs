@@ -136,3 +136,37 @@ test("the number of computers is capped and storage failures do not leak details
   assert.equal(broken.status, 500);
   assert.deepEqual(await broken.json(), { error: "Sync storage failed" });
 });
+
+test("cloud sessions add up under one computer and replace their own earlier part", async () => {
+  const { call } = store();
+  const put = (session, rows) =>
+    call("PUT", `/v1/devices/claude-cloud/sessions/${session}`, { name: "Claude cloud", days: { "2026-10-09": rows } });
+  assert.equal((await put("session_aaaaaaaa", [row("claude", 10, 1)])).status, 200);
+  assert.equal((await put("session_bbbbbbbb", [row("claude", 5, 0.5), row("codex", 7, 2)])).status, 200);
+  // A later upload of the same session replaces it rather than adding to it.
+  assert.equal((await put("session_aaaaaaaa", [row("claude", 20, 2)])).status, 200);
+  const list = await (await call("GET", "/v1/devices")).json();
+  assert.deepEqual(list.devices.map((device) => [device.id, device.name]), [["claude-cloud", "Claude cloud"]]);
+  const device = await (await call("GET", "/v1/devices/claude-cloud")).json();
+  const day = device.days["2026-10-09"];
+  assert.deepEqual(
+    day.map((entry) => [entry.client, entry.tokens.input, entry.cost, entry.messages]).sort(),
+    [["claude", 25, 2.5, 4], ["codex", 7, 2, 2]],
+  );
+  assert.equal((await call("DELETE", "/v1/devices/claude-cloud")).status, 200);
+  assert.equal((await call("GET", "/v1/devices/claude-cloud")).status, 404);
+  assert.equal((await put("session_aaaaaaaa", [row("claude", 1, 0)])).status, 200);
+  const fresh = await (await call("GET", "/v1/devices/claude-cloud")).json();
+  assert.equal(fresh.days["2026-10-09"][0].tokens.input, 1);
+});
+
+test("session parts reject bad ids, bad methods and bad snapshots", async () => {
+  const { call } = store();
+  const body = { name: "Claude cloud", days: { "2026-10-09": [row("claude", 1, 0)] } };
+  assert.equal((await call("PUT", "/v1/devices/claude-cloud/sessions/short", body)).status, 400);
+  assert.equal((await call("PUT", "/v1/devices/claude-cloud/sessions/bad.session.id", body)).status, 400);
+  assert.equal((await call("PUT", "/v1/devices/BAD/sessions/session_aaaaaaaa", body)).status, 400);
+  assert.equal((await call("GET", "/v1/devices/claude-cloud/sessions/session_aaaaaaaa")).status, 405);
+  assert.equal((await call("PUT", "/v1/devices/claude-cloud/sessions/session_aaaaaaaa", { days: {} })).status, 400);
+  assert.equal((await call("PUT", "/v1/devices/claude-cloud/sessions/session_aaaaaaaa/x", body)).status, 404);
+});
