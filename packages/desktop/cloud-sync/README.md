@@ -34,7 +34,7 @@ In your cloud environment's settings:
 
    `install` copies the script to `~/.claude/tokscale-cloud-sync.mjs` and adds a `Stop` hook to `~/.claude/settings.json` that runs it after every turn.
 
-New sessions in that environment upload from then on. The upload runs in the background, so a turn never waits for it, and an unchanged total is not sent again.
+New sessions in that environment upload from then on. The upload runs at the end of each turn, after the reply is sent; it takes a few seconds, and an unchanged total is not sent again. Each run writes one line to the session's hook log saying what it sent or why it failed.
 
 To track only some repositories instead, skip the setup script and add the same `Stop` hook to those repositories' `.claude/settings.json`, with the script checked in next to it.
 
