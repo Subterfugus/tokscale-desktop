@@ -15,7 +15,7 @@
 //   TOKSCALE_SYNC_TIMEZONE  optional IANA zone for day boundaries, e.g. America/Chicago
 //
 // It makes no model requests and uses none of the account's Claude usage.
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -109,13 +109,19 @@ export async function upload({ env = process.env, fetchImpl = fetch, readGraph }
   const hash = createHash("sha256").update(options.url + "\n" + options.session + "\n" + body).digest("hex");
   const sent = state && path.join(state, "sent");
   if (sent && fs.existsSync(sent) && fs.readFileSync(sent, "utf8") === hash) return { skipped: "unchanged" };
-  const response = await fetchImpl(`${options.url}/v1/devices/${DEVICE_ID}/sessions/${options.session}`, {
-    method: "PUT",
-    headers: { Authorization: "Bearer " + options.token, "Content-Type": "application/json" },
-    body,
-    redirect: "error",
-    signal: AbortSignal.timeout(30000),
-  });
+  let response;
+  try {
+    response = await fetchImpl(`${options.url}/v1/devices/${DEVICE_ID}/sessions/${options.session}`, {
+      method: "PUT",
+      headers: { Authorization: "Bearer " + options.token, "Content-Type": "application/json" },
+      body,
+      redirect: "error",
+      signal: AbortSignal.timeout(30000),
+    });
+  } catch (error) {
+    const cause = error?.cause?.code || error?.cause?.message || error?.message || "unknown error";
+    throw new Error(`Could not reach ${new URL(options.url).host} (${cause}). Check that it is under the environment's allowed domains.`);
+  }
   if (response.status === 404 || response.status === 405)
     throw new Error("The sync store does not accept cloud sessions yet. Redeploy it from packages/desktop/sync-worker.");
   if (!response.ok) {
@@ -144,7 +150,7 @@ export function install(home = os.homedir()) {
   const present = config.hooks.Stop.some((entry) =>
     (entry?.hooks || []).some((hook) => String(hook?.command || "").includes("tokscale-cloud-sync.mjs")),
   );
-  if (!present) config.hooks.Stop.push({ hooks: [{ type: "command", command }] });
+  if (!present) config.hooks.Stop.push({ hooks: [{ type: "command", command, timeout: 300 }] });
   fs.writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
   return { file, added: !present };
 }
@@ -177,21 +183,44 @@ async function main(mode) {
   if (mode === "install") {
     const { file, added } = install();
     log(added ? `added the upload hook to ${file}` : `the upload hook is already in ${file}`);
+    // Fetches the engine now, during setup, so the first upload is quick.
+    const warm = spawnSync("npx", ["-y", ENGINE, "--version"], { cwd: os.tmpdir(), encoding: "utf8", timeout: 240000 });
+    log(warm.status === 0 ? `engine ready: ${warm.stdout.trim()}` : `could not fetch the engine yet: ${(warm.stderr || "").trim().split("\n").at(-1)}`);
     return;
   }
   if (mode === "hook") {
-    // Hands the upload to a detached process so the session never waits on it.
+    // Runs in the foreground: an idle cloud machine can be paused as soon as
+    // the turn ends, which would stop a detached upload before it finished.
+    // The outcome goes to stderr, where the session's hook log keeps it, and
+    // a failure never blocks the session.
     process.stdin.resume();
     process.stdin.on("error", () => {});
-    const child = spawn(process.execPath, [SCRIPT], { detached: true, stdio: "ignore" });
-    child.unref();
+    try {
+      const result = await locked(() => upload());
+      log(result.skipped ? `nothing sent (${result.skipped})` : `sent ${result.uploaded} day(s) of usage`);
+    } catch (error) {
+      log(error.message);
+    }
     process.exit(0);
   }
   const result = await locked(() => upload());
   log(result.skipped ? `nothing sent (${result.skipped})` : `sent ${result.uploaded} day(s) of usage`);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(SCRIPT))
+// Cloud machines reach the internet only through the proxy in HTTPS_PROXY,
+// which Node's built-in fetch ignores unless NODE_USE_ENV_PROXY is set when
+// Node starts. Restarts this script once with it set.
+function proxied() {
+  const proxy = process.env.HTTPS_PROXY || process.env.https_proxy;
+  if (!proxy || process.env.NODE_USE_ENV_PROXY) return false;
+  const result = spawnSync(process.execPath, [SCRIPT, ...process.argv.slice(2)], {
+    stdio: "inherit",
+    env: { ...process.env, NODE_USE_ENV_PROXY: "1", NODE_NO_WARNINGS: "1" },
+  });
+  process.exit(result.status ?? 0);
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(SCRIPT) && !proxied())
   main(process.argv[2]).catch((error) => {
     log(error.message);
     process.exitCode = 1;
