@@ -28,6 +28,10 @@ export const DEVICE_ID = "claude-cloud";
 export const DEVICE_NAME = "Claude cloud";
 const TOKEN_FIELDS = ["input", "output", "cacheRead", "cacheWrite", "reasoning"];
 const SCRIPT = fileURLToPath(import.meta.url);
+// Cloud environments cache the result of their setup script, so a session can
+// start with an old copy of this file. The hook refreshes it from here first.
+const SOURCE =
+  "https://raw.githubusercontent.com/Subterfugus/tokscale-desktop/main/packages/desktop/cloud-sync/tokscale-cloud-sync.mjs";
 
 const log = (message) => process.stderr.write(`tokscale-cloud-sync: ${message}\n`);
 
@@ -179,6 +183,24 @@ async function locked(task, home = os.homedir()) {
   }
 }
 
+// Replaces this file with the published version when they differ. Returns
+// true when it did, so the caller can run the new copy instead.
+export async function refresh({ fetchImpl = fetch, file = SCRIPT, source = process.env.TOKSCALE_SYNC_SCRIPT_URL || SOURCE } = {}) {
+  let latest;
+  try {
+    const response = await fetchImpl(source, { redirect: "follow", signal: AbortSignal.timeout(20000) });
+    if (!response.ok) return false;
+    latest = await response.text();
+  } catch {
+    return false;
+  }
+  if (!latest.includes('export const DEVICE_ID = "claude-cloud"') || latest === fs.readFileSync(file, "utf8")) return false;
+  const temp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temp, latest);
+  fs.renameSync(temp, file);
+  return true;
+}
+
 async function main(mode) {
   if (mode === "install") {
     const { file, added } = install();
@@ -188,7 +210,11 @@ async function main(mode) {
     log(warm.status === 0 ? `engine ready: ${warm.stdout.trim()}` : `could not fetch the engine yet: ${(warm.stderr || "").trim().split("\n").at(-1)}`);
     return;
   }
-  if (mode === "hook") {
+  if (mode === "hook" && (await refresh())) {
+    const result = spawnSync(process.execPath, [SCRIPT, "hook-now"], { stdio: "inherit", env: process.env });
+    process.exit(result.status ?? 0);
+  }
+  if (mode === "hook" || mode === "hook-now") {
     // Runs in the foreground: an idle cloud machine can be paused as soon as
     // the turn ends, which would stop a detached upload before it finished.
     // The outcome goes to stderr, where the session's hook log keeps it, and
