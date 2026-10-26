@@ -359,16 +359,21 @@ async function runUiChecks({ window, mini, output, terminalCount, fixtureHome })
   const connectionText = await exec(
     () => document.querySelector(".connection-section").innerText,
   );
-  assert.match(connectionText, /Connect Claude desktop/);
+  assert.match(connectionText, /primary@example\.test/);
+  assert.match(connectionText, /secondary@example\.test/);
   assert.match(connectionText, /Antigravity/);
   assert.match(connectionText, /Connect OpenRouter/);
-  await click(".connection-card button", "Connect Claude desktop");
+  await click(".claude-accounts .connection-card button", "Connect");
   await wait(() =>
     document
       .querySelector(".connection-card")
       ?.innerText.includes("25.0% used"),
   );
   await connectionsReady();
+  await click(".claude-accounts .connection-card button", "Connect");
+  await wait(() => [...document.querySelectorAll(".claude-accounts .connection-card")].some(card => card.innerText.includes("secondary@example.test") && card.innerText.includes("65.0% used")));
+  await connectionsReady();
+  checks.push("Two Claude profiles connect independently and show distinct subscription limits");
   await exec(() => {
     const input = document.querySelector(
       'input[aria-label="OpenRouter management key"]',
@@ -406,10 +411,13 @@ async function runUiChecks({ window, mini, output, terminalCount, fixtureHome })
   await wait(() =>
     [...document.querySelectorAll(".connection-card button")].some(
       (button) =>
-        button.textContent.includes("Connect Claude desktop") &&
+        button.textContent.trim() === "Connect" &&
         !button.disabled,
     ),
   );
+  await connectionsReady();
+  assert.ok(await exec(() => [...document.querySelectorAll(".claude-accounts .connection-card")].some(card => card.innerText.includes("secondary@example.test") && card.innerText.includes("65.0% used"))), "Disconnecting the primary Claude profile removed the secondary profile's limits");
+  await click(".claude-accounts .connection-card button", "Disconnect");
   await connectionsReady();
   await click(".connection-card button", "Disconnect");
   await wait(() =>
@@ -417,7 +425,7 @@ async function runUiChecks({ window, mini, output, terminalCount, fixtureHome })
   );
   await connectionsReady();
   checks.push(
-    "Desktop Claude connect, OpenRouter encrypted save/balance/disconnect and Antigravity detection work with synthetic provider replies",
+    "Multiple Claude connect/disconnect, OpenRouter encrypted save/balance/disconnect and Antigravity detection work with synthetic provider replies",
   );
   await nav("Settings");
   await snapshot("settings");

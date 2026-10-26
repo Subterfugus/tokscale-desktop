@@ -21,7 +21,7 @@ const { randomUUID } = require("node:crypto");
 const security = require("./security.cjs");
 const { runCommand } = require("./runner.cjs");
 const { createOpenRouter } = require("./accounts.cjs");
-const { createClaudeDesktop } = require("./claude-desktop.cjs");
+const { createClaudeAccounts } = require("./claude-accounts.cjs");
 const { createProviderCache } = require("./provider-cache.cjs");
 const { getSessionTitles } = require("./session-titles.cjs");
 const { createPreferences } = require("./preferences.cjs");
@@ -57,8 +57,7 @@ let window,
   appUpdate,
   appWatcher,
   sync,
-  claudeRequests,
-  claudeDisconnecting = false,
+  claudeAccounts,
   quitting = false,
   settingsWarning = "";
 const miniPath = path.join(__dirname, "../dist-renderer/mini.html");
@@ -106,7 +105,7 @@ let preferenceStore;
 function savePreferences(patch) {
   return preferenceStore.save(patch).then(values => {
     const homeChanged = preferences.home !== values.home;
-    const claudeChanged = Boolean(preferences.claudeDesktopConnected) !== Boolean(values.claudeDesktopConnected);
+    const claudeChanged = JSON.stringify([preferences.claudeDesktopConnected, preferences.claudeAccountIds, preferences.claudeProfileDirs]) !== JSON.stringify([values.claudeDesktopConnected, values.claudeAccountIds, values.claudeProfileDirs]);
     const upstreamChanged = (preferences.upstreamNotifications !== false) !== (values.upstreamNotifications !== false);
     const updatesChanged = (preferences.appUpdateChecks !== false) !== (values.appUpdateChecks !== false);
     const miniChanged = (preferences.miniEnabled !== false) !== (values.miniEnabled !== false);
@@ -127,7 +126,7 @@ function savePreferences(patch) {
       else appWatcher.stop();
     }
     if (homeChanged) monitor?.invalidate();
-    else if (claudeChanged) monitor?.invalidate(source => !/claude|anthropic/i.test(source.provider));
+    else if (claudeChanged) monitor?.invalidate(source => !/claude|anthropic/i.test(source.provider) || values.claudeAccountIds?.some(id => source.id.includes(`:${id}:`)));
     // The save itself succeeded; a failing side effect must not report otherwise.
     for (const effect of [applyTheme, applyLoginItem, () => mini?.applyTheme(), () => mini?.applyOpacity?.(), refreshTray])
       try { effect(); } catch (error) { console.error(error.message); }
@@ -195,27 +194,28 @@ function refreshTray() {
     ]),
   );
 }
-// Limits come from the connected Claude desktop account and from the engine's
-// own quota report; the desktop reading wins when both describe Claude.
+// Claude subscriptions are owned by the per-account reader. Other providers
+// come from the engine's quota report.
 async function limitSources() {
   const sources = [];
   // Several accounts can share a provider; the account keeps their ids apart.
-  const add = (provider, metrics, account = "") => {
+  const add = (provider, metrics, account = "", identity = account) => {
     for (const metric of Array.isArray(metrics) ? metrics : [])
       sources.push({
-        id: `${provider}:${account}:${metric.label}`.toLowerCase(),
+        id: `${provider}:${identity}:${metric.label}`.toLowerCase(),
         provider,
-        label: metric.label,
+        label: account ? `${account} · ${metric.label}` : metric.label,
         usedPercent: metric.used_percent,
         resetsAt: metric.resets_at || null,
       });
   };
   const failures = [];
-  let desktopClaude = false;
-  if (preferences.claudeDesktopConnected && !claudeDisconnecting)
-    await claudeRequests.refresh({}).then((result) => {
-      add("Claude", result.metrics);
-      desktopClaude = sources.some(source => source.provider === "Claude" && Number.isFinite(source.usedPercent));
+  if (claudeAccounts)
+    await claudeAccounts.refresh().then((result) => {
+      for (const account of result.accounts.filter(account => account.connected)) {
+        if (account.error) failures.push(new Error(account.error));
+        else add("Claude", account.metrics, account.label, account.id);
+      }
     }, (error) => failures.push(error));
   await run(["usage", "--json"]).then((result) => {
     if (result.code !== 0) throw new Error(result.stderr || "Quota report failed");
@@ -223,7 +223,7 @@ async function limitSources() {
     for (const row of Array.isArray(rows) ? rows : []) {
       // Copilot is hidden in the app; the Limits page skips it too.
       if (typeof row?.provider !== "string" || /^copilot$/i.test(row.provider)) continue;
-      if (desktopClaude && /claude|anthropic/i.test(row.provider)) continue;
+      if (/claude|anthropic/i.test(row.provider)) continue;
       add(row.provider.replace(/^\w/, (c) => c.toUpperCase()), row.metrics, row.account?.label || row.email || "");
     }
   }).catch((error) => failures.push(error));
@@ -427,34 +427,24 @@ function wireApi() {
   handle("appUpdateStatus", () => updateStatus());
   handle("appUpdateCheck", () => appUpdate.poll().then(updateStatus));
   handle("appUpdateInstall", () => installUpdate());
-  const claudeDesktop = createClaudeDesktop({ env: engineEnv() });
-  let claudeRevision = 0;
-  handle("claudeDesktopStatus", () => claudeDesktop.status());
-  claudeRequests = createProviderCache(async () => {
-    if (claudeDisconnecting) throw new Error("Claude is disconnecting. Try again after it completes.");
-    const attempt = claudeRevision;
-    const result = smoke
-      ? {
-          detected: true,
-          source: "Generated desktop account",
-          checkedAt: new Date().toISOString(),
-          metrics: [
-            { label: "5-hour usage", used_percent: 25, resets_at: null },
-            { label: "Weekly usage", used_percent: 40, resets_at: null },
-          ],
-          samples: [
-            { timestamp: 1791054000000, fiveHour: 20, sevenDay: 35 },
-            { timestamp: 1791057600000, fiveHour: 25, sevenDay: 40 },
-          ],
-        }
-      : await claudeDesktop.refresh();
-    if (attempt !== claudeRevision) throw new Error('Claude was disconnected while refreshing.');
-    // Retain consent to reuse the desktop sign-in, never a duplicate token.
-    if (!preferences.claudeDesktopConnected) await savePreferences({ claudeDesktopConnected: true });
-    if (attempt !== claudeRevision) throw new Error('Claude was disconnected while refreshing.');
-    return result;
+  claudeAccounts = createClaudeAccounts({
+    env: engineEnv(),
+    getSettings: () => preferences,
+    saveSettings: savePreferences,
+    ...(smoke ? { fetchImpl: async (_url, options) => ({
+      ok: true, status: 200,
+      json: async () => ({
+        five_hour: { utilization: options.headers.Authorization.includes("secondary") ? 65 : 25, resets_at: null },
+        seven_day: { utilization: options.headers.Authorization.includes("secondary") ? 80 : 40, resets_at: null },
+      }),
+    }) } : {}),
   });
-  handle("claudeDesktopRefresh", (options) => claudeRequests.refresh(options));
+  handle("claudeDesktopStatus", () => claudeAccounts.status());
+  handle("claudeDesktopRefresh", options => claudeAccounts.refresh(options));
+  handle("claudeProfileSelect", async () => {
+    const selection = await dialog.showOpenDialog(window, { title: "Select a signed-in Claude Code profile", properties: ["openDirectory", "showHiddenFiles"] });
+    return selection.canceled ? claudeAccounts.status() : claudeAccounts.addDirectory(selection.filePaths[0]);
+  });
   handle("limitSnapshot", async () => {
     if (!monitor) return { sources: [], checkedAt: null, error: null, lines: [] };
     const status = monitor.snapshot();
@@ -462,17 +452,10 @@ function wireApi() {
       return monitor.poll();
     return status;
   });
-  handle("claudeDesktopDisconnect", async () => {
-    claudeDisconnecting = true;
-    claudeRevision++;
-    claudeRequests.invalidate();
-    monitor?.invalidate(source => !/claude|anthropic/i.test(source.provider));
-    try {
-      await savePreferences({ claudeDesktopConnected: false });
-      return { connected: false };
-    } finally {
-      claudeDisconnecting = false;
-    }
+  handle("claudeDesktopDisconnect", async accountId => {
+    // Clear visible limits immediately, before an outstanding request can finish.
+    monitor?.invalidate(source => !source.id.includes(`:${accountId}:`));
+    return claudeAccounts.disconnect(accountId);
   });
   const openrouter = createOpenRouter({
     file: path.join(app.getPath("userData"), "openrouter-connection.json"),
@@ -735,7 +718,7 @@ function wireApi() {
   handle("saveSettings", async (value) => {
     const next = security.settings(value);
     // These are owned by the main process and follow real state.
-    for (const key of ["claudeDesktopConnected", "miniBounds", "miniMicro", "miniMicroBounds"]) delete next[key];
+    for (const key of ["claudeDesktopConnected", "claudeAccountIds", "claudeProfileDirs", "miniBounds", "miniMicro", "miniMicroBounds"]) delete next[key];
     const home = next.home;
     if (home && !(await fs.stat(home)).isDirectory())
       throw new Error("Home must be a folder");

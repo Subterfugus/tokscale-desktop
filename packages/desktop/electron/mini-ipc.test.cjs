@@ -31,7 +31,7 @@ function harness() {
     module.exports = {
       setup(mainWindow, widget, store) { window = mainWindow; mini = widget; preferenceStore = store; },
       savePreferences, wireApi, limitSources,
-      setClaude(requests) { claudeRequests = requests; },
+      setClaude(accounts) { claudeAccounts = accounts; },
       setSync(service) { sync = service; },
     };
   `, {
@@ -114,6 +114,35 @@ test("simultaneous quota reports share one engine run, and later ones run again"
   assert.equal(quota(), 2);
   await Promise.all([invoke(main, "run", ["models", "--json"]), invoke(main, "run", ["models", "--json"])]);
   assert.equal(engineRuns.length, 4);
+});
+
+test("multiple Claude accounts reach shared limits with unique ids and named notifications, without the engine duplicate", async () => {
+  const { api, engine } = harness();
+  engine.stdout = JSON.stringify([{ provider: "Claude", metrics: [{ label: "Weekly usage", used_percent: 99 }] }, { provider: "Codex", metrics: [{ label: "Weekly", used_percent: 15 }] }]);
+  api.setClaude({ refresh: async () => ({ accounts: [
+    { id: "account-one", label: "one@example.test", connected: true, metrics: [{ label: "Weekly usage", used_percent: 25 }] },
+    { id: "account-two", label: "two@example.test", connected: true, metrics: [{ label: "Weekly usage", used_percent: 65 }] },
+  ] }) });
+  let result = await api.limitSources();
+  assert.equal(result.sources.length, 3);
+  assert.equal(new Set(result.sources.map(source => source.id)).size, 3);
+  assert.ok(result.sources.some(source => source.label === "one@example.test · Weekly usage"));
+  assert.ok(result.sources.some(source => source.label === "two@example.test · Weekly usage"));
+  assert.ok(!result.sources.some(source => source.usedPercent === 99));
+  const notices = [];
+  const { createLimitMonitor } = require("./limit-monitor.cjs");
+  const monitor = createLimitMonitor({ getSources: async () => result, notify: value => notices.push(value) });
+  await monitor.poll();
+  result.sources[1].usedPercent = 95;
+  await monitor.poll();
+  assert.match(notices[0].title, /two@example.test/);
+  api.setClaude({ refresh: async () => ({ accounts: [
+    { id: "account-one", label: "one@example.test", connected: true, error: "Rate limited", metrics: [{ label: "Weekly usage", used_percent: 90 }] },
+    { id: "account-two", label: "two@example.test", connected: true, metrics: [{ label: "Weekly usage", used_percent: 65 }] },
+  ] }) });
+  result = await api.limitSources();
+  assert.equal(result.sources.length, 2);
+  assert.ok(result.error);
 });
 
 test("preload exposes mini movement on the existing invoke channel", () => {

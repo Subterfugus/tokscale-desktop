@@ -115,6 +115,16 @@ function settings(value) {
       throw new Error("Invalid mini window limits");
     result.miniHiddenLimits = [...new Set(ids)];
   }
+  if (value.claudeAccountIds !== undefined) {
+    if (!Array.isArray(value.claudeAccountIds) || value.claudeAccountIds.length > 100 || value.claudeAccountIds.some(id => typeof id !== "string" || !/^claude-[a-f0-9]{32}$/.test(id)))
+      throw new Error("Invalid Claude accounts");
+    result.claudeAccountIds = [...new Set(value.claudeAccountIds)];
+  }
+  if (value.claudeProfileDirs !== undefined) {
+    if (!Array.isArray(value.claudeProfileDirs) || value.claudeProfileDirs.length > 50 || value.claudeProfileDirs.some(dir => typeof dir !== "string" || dir.length > 32760 || dir.includes("\0") || !path.isAbsolute(dir)))
+      throw new Error("Invalid Claude profile folders");
+    result.claudeProfileDirs = [...new Set(value.claudeProfileDirs)];
+  }
   if (value.miniLimitOrder !== undefined) {
     const ids = value.miniLimitOrder;
     if (!Array.isArray(ids) || ids.length > 200 || ids.some(id => typeof id !== "string" || !id || id.length > 300))

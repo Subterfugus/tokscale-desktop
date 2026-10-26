@@ -40,7 +40,7 @@ A 64-bit version of Windows is required. Nothing else needs to be installed for 
 
 Connections are optional. Reports work from local logs alone.
 
-- **Claude desktop:** sign in to the Claude app, then connect it under **Connections**. The app reads the sign-in it already stores on your computer and makes read-only usage requests.
+- **Claude subscriptions:** connect each Claude Code or Claude desktop profile under **Connections**. Multiple subscriptions have separate limits, widget entries, and notifications. Standard profile folders are detected automatically; use **Add profile folder** for a custom location.
 - **OpenRouter:** paste a management key in **Connections**. It is encrypted with Windows credential protection and stays on this computer.
 - **Antigravity:** detected and synced from its local service.
 

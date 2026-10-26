@@ -6,9 +6,9 @@ This file gives Claude Code and other contributors the context needed to edit th
 
 This is a fork of [junhoyeo/tokscale](https://github.com/junhoyeo/tokscale), with a native Windows desktop interface added in `packages/desktop`. The fork is [Subterfugus/tokscale-desktop](https://github.com/Subterfugus/tokscale-desktop). The local branch is `desktop-ui`; `origin` points to the fork and `upstream` points to the original project.
 
-The user wants an easy desktop experience while retaining Tokscale's original capabilities. Priorities include connecting Claude desktop, Antigravity, and OpenRouter without complicated setup. Claude desktop is the user's intended Claude connection; do not assume they mean only the standalone Claude Code CLI.
+The user wants an easy desktop experience while retaining Tokscale's original capabilities. Priorities include connecting Claude desktop, Antigravity, and OpenRouter without complicated setup. Claude connections include multiple Claude Code subscriptions as well as the existing Claude desktop sign-in.
 
-The desktop package is currently version `0.4.11` (0.4.9 was a throwaway updater test release cut from the `desktop-updater-test` branch, so real versions continue from 0.4.10) and pins the published Windows Tokscale engine at `4.17.0`. The application is Electron with a React interface, loads bundled files through `file://`, and does not require a local web server. The original interactive terminal is available through xterm and node-pty. Windows portable builds and optional NSIS installers are supported; current builds are unsigned.
+The desktop package is currently version `0.4.13` (0.4.9 was a throwaway updater test release cut from the `desktop-updater-test` branch, so real versions continue from 0.4.10) and pins the published Windows Tokscale engine at `4.17.0`. The application is Electron with a React interface, loads bundled files through `file://`, and does not require a local web server. The original interactive terminal is available through xterm and node-pty. Windows portable builds and optional NSIS installers are supported; current builds are unsigned.
 
 ## Where to edit
 
@@ -38,6 +38,7 @@ The desktop package is currently version `0.4.11` (0.4.9 was a throwaway updater
 | `packages/desktop/electron/runner.cjs` | Native command execution, cancellation, output limits, and argument handling |
 | `packages/desktop/electron/security.cjs` | IPC and external URL validation |
 | `packages/desktop/electron/claude-desktop.cjs` | Existing desktop sign-in detection and read-only subscription usage access |
+| `packages/desktop/electron/claude-accounts.cjs` | Multiple local Claude profiles, account deduplication, per-account connection state, quota caches and cooldowns |
 | `packages/desktop/electron/accounts.cjs` | OpenRouter credits endpoint and encrypted key storage |
 | `packages/desktop/electron/session-titles.cjs` | Read-only saved Codex names (maps database IDs and rollout filename stems) and saved Claude titles from transcript metadata (keyed by transcript filename stem) |
 | `packages/desktop/electron/provider-cache.cjs` | Short-lived provider response caching and in-flight request coalescing |
@@ -95,6 +96,7 @@ Always place `--no-spinner` **before** the subcommand in automated invocations. 
 ## Connection behavior and boundaries
 
 - **Claude desktop:** detects direct-download and Microsoft Store profiles, reads the existing OAuth cache, decrypts it in memory using Windows DPAPI and AES-GCM, and queries the subscription usage endpoint. It also reads `plan-usage-history.json` for saved utilization snapshots. The app does not refresh or modify Claude's sign-in files. Disconnect disables this app's automatic requests without signing the user out of Claude.
+- **Multiple Claude subscriptions:** discovers `.claude`, sibling profiles such as `.claude_second`, `CLAUDE_CONFIG_DIR`, custom folders, and installed desktop profiles. Existing tokens are read in the main process and never refreshed or copied. Connection consent is saved as account IDs; old desktop consent migrates to the detected desktop account. Account labels and stable IDs reach the shared monitor for independent widget limits and notifications. The new reader owns Claude quota cards; engine Claude rows are omitted to avoid duplicates.
 - **Claude token reports:** remain based on transcripts discovered by the original engine. Connecting the account adds quota information; it does not import every cloud chat or supply a complete account-wide historical token total. Chat history can contain useful usage metadata, so verify actual storage and schemas rather than declaring desktop token tracking impossible.
 - **Antigravity:** Detect and Sync use the original engine's status and sync commands and its local service. The user signs in through Antigravity itself.
 - **OpenRouter:** the user wants account credits and spending. This fork reads `GET /api/v1/credits` using a management key, verifies it before storing it, and encrypts the saved key with Electron safeStorage. An ordinary inference key is insufficient for this endpoint. No real OpenRouter account key was supplied during development; its behavior was tested with synthetic replies.

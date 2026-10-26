@@ -156,10 +156,11 @@ function createClaudeDesktop({
   env = process.env,
   fetchImpl = fetch,
   unlock = unprotect,
+  roots,
 }) {
   let retryAt = 0;
   async function find() {
-    for (const root of await desktopRoots(env)) {
+    for (const root of roots || await desktopRoots(env)) {
       try {
         const config = await readJson(path.join(root, "config.json"));
         if (config["oauth:tokenCacheV2"] && config.lastKnownAccountUuid)

@@ -39,7 +39,7 @@ function creditText(credit) {
 export function Limits({ epoch, refresh, toCommand }) {
   const state = useReport(["usage", "--json"], epoch);
   const rows = (Array.isArray(state.data) ? state.data : []).filter(
-    (r) => !HIDDEN_PROVIDERS.includes(String(r.provider).toLowerCase()),
+    (r) => !HIDDEN_PROVIDERS.includes(String(r.provider).toLowerCase()) && !/claude|anthropic/i.test(r.provider),
   );
   return (
     <>

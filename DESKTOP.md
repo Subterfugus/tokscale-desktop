@@ -64,7 +64,11 @@ When more than one computer is connected, Overview, Models (model, client and pr
 
 The app syncs at startup and every 5 minutes while it runs, including in the tray, and uploads only when its totals changed. A copy of the other computers' totals is kept locally, so reports still combine them offline. Days a client has since deleted from disk are kept from this computer's earlier upload, per client and day, so history in the store outlives transcript cleanup. The access token is encrypted with Windows credential protection. **Disconnect** forgets the connection on this computer and leaves the store untouched; **Remove** deletes another computer's snapshot from the store.
 
-## Connect Claude desktop, Antigravity, and OpenRouter
+## Connect Claude subscriptions, Antigravity, and OpenRouter
+
+Version 0.4.13 supports multiple Claude subscriptions. **Connections** and **Limits** show a card for each detected account, with separate connect, refresh, and disconnect controls. The reader discovers `~/.claude`, sibling profiles such as `~/.claude_second`, `CLAUDE_CONFIG_DIR`, and the installed Claude desktop profiles. Use **Add profile folder** for other Claude Code locations. Sign in to each profile using Claude Code first; Tokscale reads the existing access token without refreshing or rewriting Claude's credential files.
+
+Account names appear beside their limits in the mini window, tray, and notifications. Multiple local logins for the same account are combined into one subscription card. A failed or rate-limited account leaves the others available, and existing Claude desktop connections are retained. Transcript reports still use the bundled engine's source discovery; adding a subscription profile connects its quotas and does not add its transcripts to reports.
 
 Open **Connections** for the connection cards. Connected Claude desktop usage and OpenRouter balances also appear under **Limits**.
 

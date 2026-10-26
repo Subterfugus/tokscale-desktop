@@ -10,9 +10,9 @@ const timestamp = (value) =>
 
 // A newer request or an unmount must invalidate previous async UI updates.
 // In particular, a late automatic refresh must not undo a disconnect.
-function useConnectionRequest() {
+function useConnectionRequest(initialBusy = "loading") {
   const revision = useRef(0);
-  const [busy, setBusy] = useState("loading"),
+  const [busy, setBusy] = useState(initialBusy),
     [error, setError] = useState("");
   const cancel = useCallback(() => {
     revision.current += 1;
@@ -61,153 +61,84 @@ function ConnectionCard({ name, status, tone, busy, summary, children, actions, 
 const external = (run, url) => () => run("opening", () => api.openExternal(url));
 
 export function ClaudeDesktopCard({ epoch }) {
-  const [state, setState] = useState(null),
-    [connected, setConnected] = useState(false);
+  const [accounts, setAccounts] = useState([]);
   const { busy, error, run, cancel } = useConnectionRequest();
   const lastEpoch = useRef(epoch);
+  const change = result => {
+    cancel();
+    run("updating", async update => update(() => setAccounts(result.accounts || [])));
+  };
   useEffect(() => {
     const force = lastEpoch.current !== epoch;
     lastEpoch.current = epoch;
-    run("loading", async (update) => {
-      const [status, info] = await Promise.all([
-        api.claudeDesktopStatus(),
-        api.connectionStatus(),
-      ]);
-      update(() => {
-        setState((previous) =>
-          info.claudeDesktopConnected ? { ...previous, ...status } : status,
-        );
-        setConnected(info.claudeDesktopConnected);
-      });
-      if (info.claudeDesktopConnected) {
-        const result = await api.claudeDesktopRefresh({ force });
-        update(() => setState(result));
-      }
+    run("loading", async update => {
+      const status = await api.claudeDesktopStatus();
+      update(() => setAccounts(status.accounts || []));
+      const result = await api.claudeDesktopRefresh({ force });
+      update(() => setAccounts(result.accounts || []));
     });
     return cancel;
   }, [epoch, run, cancel]);
-  const connect = () =>
-    run("refresh", async (update) => {
-      const result = await api.claudeDesktopRefresh({ force: true });
-      update(() => {
-        setState(result);
-        setConnected(true);
-      });
-    });
-  const disconnect = () =>
-    run("disconnect", async (update) => {
-      await api.claudeDesktopDisconnect();
-      update(() => {
-        setConnected(false);
-        setState(null);
-      });
-      const status = await api.claudeDesktopStatus();
-      update(() => setState(status));
-    });
-  const samples = (state?.samples || [])
-      .filter((sample) => Number.isFinite(sample.timestamp))
-      .sort((a, b) => a.timestamp - b.timestamp),
-    latest = samples.at(-1),
-    points = samples.slice(-40);
-  const metrics = (
-    state?.metrics ||
-    (latest
-      ? [
-          { label: "5-hour usage", used_percent: latest.fiveHour },
-          { label: "Weekly usage", used_percent: latest.sevenDay },
-        ]
-      : [])
-  ).filter((row) => Number.isFinite(row.used_percent));
-  const live = connected && state?.checkedAt;
   return (
-    <ConnectionCard
-      name="Claude desktop"
-      busy={busy}
-      summary="Subscription limits for the account signed in to Claude desktop."
-      tone={live ? (error ? "warning" : "good") : undefined}
-      status={
-        busy === "loading"
-          ? "Checking…"
-          : live
-            ? error
-              ? "Stale"
-              : "Connected"
-            : latest
-              ? "Saved snapshot"
-              : state?.detected
-                ? "Sign-in found"
-                : "Not signed in"
-      }
-      note={
-        state?.checkedAt
-          ? `${error ? "Last checked" : "Checked"} ${timestamp(state.checkedAt)}. Your sign-in is read locally and sent only to Anthropic.`
-          : latest
-            ? `Saved snapshot from ${timestamp(latest.timestamp)}.`
-            : !busy && !connected
-              ? state?.detected
-                ? "Your desktop sign-in is available. Connect to check current limits."
-                : "Open Claude desktop and sign in, then connect here."
-              : "Your sign-in is read locally and sent only to Anthropic."
-      }
-      actions={
-        <>
-          <Button
-            variant={connected ? undefined : "primary"}
-            icon={connected ? RefreshCw : undefined}
-            spin={busy === "refresh"}
-            disabled={Boolean(busy)}
-            onClick={connect}
-          >
-            {busy === "refresh"
-              ? "Checking…"
-              : connected
-                ? "Refresh"
-                : "Connect Claude desktop"}
-          </Button>
-          {connected && (
-            <Button variant="ghost" disabled={Boolean(busy)} onClick={disconnect}>
-              {busy === "disconnect" ? "Disconnecting…" : "Disconnect"}
-            </Button>
-          )}
-          <Button
-            variant="ghost"
-            iconEnd={ExternalLink}
-            disabled={Boolean(busy)}
-            onClick={external(run, "https://claude.ai/settings/usage")}
-          >
-            Open in Claude
-          </Button>
-        </>
-      }
-    >
+    <div className="claude-accounts" style={{ gridColumn: "1 / -1" }}>
+      <div className="section-head">
+        <div><h2>Claude subscriptions</h2><p>Connect each local profile to track its limits separately.</p></div>
+        <Button small disabled={Boolean(busy)} onClick={() => run("folder", async update => {
+          const result = await api.claudeProfileSelect();
+          update(() => setAccounts(result.accounts || []));
+        })}>Add profile folder</Button>
+      </div>
       {error && <Notice tone="error">{error}</Notice>}
-      {metrics.map((row, index) => (
-        <Meter
-          key={index}
-          label={row.label}
-          value={row.used_percent}
-          detail={row.resets_at ? `Resets ${timestamp(row.resets_at)}` : undefined}
-          pace={metricPace(row)}
-        />
-      ))}
-      {state?.spend && (
-        <p className="connection-line">
-          <span>Extra usage</span>
-          <b>
-            {money(state.spend.spent)} of {money(state.spend.limit)}
-          </b>
-        </p>
-      )}
-      {points.length > 1 && (
-        <TrendLines
-          label="Saved five-hour and weekly plan usage history"
-          points={points}
-          series={[
-            { field: "fiveHour", color: SERIES[0], name: "5-hour" },
-            { field: "sevenDay", color: SERIES[1], name: "Weekly" },
-          ]}
-        />
-      )}
+      <div className="connection-grid">
+        {accounts.map(account => <ClaudeAccountCard key={account.id} account={account} onChange={change} />)}
+        {!accounts.length && <ConnectionCard name="Claude" busy={busy} status={busy ? "Checking…" : "No profiles found"}
+          summary="Sign in to Claude Code or Claude desktop, then refresh. Use Add profile folder for a custom Claude Code location."
+          actions={<Button disabled={Boolean(busy)} onClick={() => run("loading", async update => {            const result = await api.claudeDesktopStatus();            update(() => setAccounts(result.accounts || []));          })}>Detect profiles</Button>} />}
+      </div>
+    </div>
+  );
+}
+
+function ClaudeAccountCard({ account: state, onChange }) {
+  const { busy, error, run, cancel } = useConnectionRequest("");
+  useEffect(() => cancel, [cancel]);
+  const connected = state.connected;
+  const connect = () => run("refresh", async update => {
+    const result = await api.claudeDesktopRefresh({ accountId: state.id, force: true });
+    update(() => onChange(result));
+  });
+  const disconnect = () => run("disconnect", async update => {
+    const result = await api.claudeDesktopDisconnect(state.id);
+    update(() => onChange(result));
+  });
+  const samples = (state.samples || []).filter(sample => Number.isFinite(sample.timestamp)).sort((a,b) => a.timestamp-b.timestamp);
+  const latest = samples.at(-1), points = samples.slice(-40);
+  const metrics = (state.metrics || (latest ? [
+    { label: "5-hour usage", used_percent: latest.fiveHour },
+    { label: "Weekly usage", used_percent: latest.sevenDay },
+  ] : [])).filter(row => Number.isFinite(row.used_percent));
+  const failure = error || state.error;
+  const live = connected && state.checkedAt;
+  return (
+    <ConnectionCard name={state.label} busy={busy} summary={[state.source, state.plan].filter(Boolean).join(" · ")}
+      tone={failure ? "warning" : live ? "good" : undefined}
+      status={busy ? "Checking…" : failure ? "Needs attention" : live ? "Connected" : connected ? "Connected" : "Sign-in found"}
+      note={state.checkedAt ? `${failure ? "Last checked" : "Checked"} ${timestamp(state.checkedAt)}. Your sign-in is read locally and sent only to Anthropic.` : "Your sign-in is read locally and sent only to Anthropic."}
+      actions={<>
+        <Button variant={connected ? undefined : "primary"} icon={connected ? RefreshCw : undefined} spin={busy === "refresh"} disabled={Boolean(busy)} onClick={connect}>
+          {busy === "refresh" ? "Checking…" : connected ? "Refresh" : "Connect"}
+        </Button>
+        {connected && <Button variant="ghost" disabled={Boolean(busy)} onClick={disconnect}>Disconnect</Button>}
+        <Button variant="ghost" iconEnd={ExternalLink} disabled={Boolean(busy)} onClick={external(run, "https://claude.ai/settings/usage")}>Open in Claude</Button>
+      </>}
+    >
+      {failure && <Notice tone="error">{failure}</Notice>}
+      {metrics.map((row, index) => <Meter key={index} label={row.label} value={row.used_percent}
+        detail={row.resets_at ? `Resets ${timestamp(row.resets_at)}` : undefined} pace={metricPace(row)} />)}
+      {state.spend && <p className="connection-line"><span>Extra usage</span><b>{money(state.spend.spent)} of {money(state.spend.limit)}</b></p>}
+      {points.length > 1 && <TrendLines label="Saved five-hour and weekly plan usage history" points={points} series={[
+        { field: "fiveHour", color: SERIES[0], name: "5-hour" }, { field: "sevenDay", color: SERIES[1], name: "Weekly" },
+      ]} />}
     </ConnectionCard>
   );
 }

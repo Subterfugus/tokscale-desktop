@@ -9,13 +9,21 @@ export const USAGE_PROVIDERS = [
 ];
 
 // Fixed, invented activity: 40 sessions, 160 messages, 5,446,000 tokens.
-// No credentials, real conversation text, or provider account data.
+// Synthetic credentials only; no real conversation text or provider data.
 export async function createFixture(home) {
   const codexRoot = path.join(home, ".codex/sessions");
   const claudeRoot = path.join(home, ".claude/projects/C--Demo-Atlas");
   const configRoot = path.join(home, ".config/tokscale");
   for (const dir of [codexRoot, claudeRoot, configRoot])
     await mkdir(dir, { recursive: true });
+  for (const [folder, name] of [[".claude", "primary"], [".claude_second", "secondary"]]) {
+    const root = path.join(home, folder);
+    await mkdir(root, { recursive: true });
+    await writeFile(path.join(root, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+      accessToken: `synthetic-${name}-token`, expiresAt: Date.now() + 86400000, scopes: ["user:profile"], subscriptionType: "pro",
+    } }));
+    await writeFile(path.join(root, ".claude.json"), JSON.stringify({ oauthAccount: { accountUuid: name, emailAddress: `${name}@example.test` } }));
+  }
   await writeFile(
     path.join(configRoot, "settings.json"),
     JSON.stringify({
