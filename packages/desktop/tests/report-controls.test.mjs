@@ -1,6 +1,35 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateDateFilter, filterTableRows, tokenTotal, reportRangeLabel, graphAverageTokens, calendarContributionCells } from "../renderer/report-data.js";
+import { validateDateFilter, filterTableRows, tokenTotal, reportRangeLabel, graphAverageTokens, calendarContributionCells, reportCacheKey } from "../renderer/report-data.js";
+
+test("relative reports cannot reuse another day's successful totals after a failed refresh", () => {
+  const before = new Date(2026, 9, 30, 23, 59);
+  const after = new Date(2026, 10, 4, 16, 33);
+  for (const period of ["--today", "--yesterday", "--week", "--month"]) {
+    for (const graph of [true, false]) {
+      const args = ["--no-spinner", ...(graph ? [] : ["models", "--json"]), period];
+      const cached = new Map([[reportCacheKey(graph, args, "all", before), { cost: 55.96 }]]);
+      assert.equal(cached.get(reportCacheKey(graph, args, "all", after)), undefined);
+      assert.deepEqual(cached.get(reportCacheKey(graph, args, "all", new Date(2026, 9, 30, 23, 59, 59))), { cost: 55.96 });
+    }
+  }
+});
+
+test("relative report caches roll over at local midnight, including DST days", () => {
+  const args = ["--today"];
+  const key = date => reportCacheKey(true, args, "all", date);
+  assert.notEqual(key(new Date(2026, 9, 31, 23, 59)), key(new Date(2026, 10, 1, 0, 1)));
+  assert.equal(key(new Date(2026, 10, 1, 0, 1)), key(new Date(2026, 10, 1, 23, 59)));
+});
+
+test("fixed date and all-time caches remain reusable without mixing computers or report kinds", () => {
+  const before = new Date(2026, 9, 30), after = new Date(2026, 10, 4);
+  for (const args of [[], ["--since", "2026-10-30", "--until", "2026-10-30"], ["--year", "2026"]]) {
+    assert.equal(reportCacheKey(true, args, "all", before), reportCacheKey(true, args, "all", after));
+    assert.notEqual(reportCacheKey(true, args, "all", after), reportCacheKey(true, args, "desktop", after));
+    assert.notEqual(reportCacheKey(true, args, "all", after), reportCacheKey(false, args, "all", after));
+  }
+});
 
 test("custom date validation rejects reversed, impossible and partial dates without crashing", () => {
   for (const range of [

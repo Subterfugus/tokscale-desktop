@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { safeMessage } from "./format.js";
+import { reportCacheKey } from "./report-data.js";
 
 export const api = window.tokscale;
 const cache = new Map();
@@ -28,7 +29,7 @@ async function jsonRun(args, computer) {
 
 export function useReport(args, epoch, enabled = true, graph = false) {
   const computer = useContext(ReportComputer);
-  const key = JSON.stringify([graph, args, computer]);
+  const key = reportCacheKey(graph, args, computer);
   const [state, setState] = useState({
     key,
     data: null,

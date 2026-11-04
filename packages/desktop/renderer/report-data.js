@@ -14,6 +14,16 @@ export const TOKEN_TYPES = [
 ];
 export const ALL_TOKEN_TYPES = TOKEN_TYPES.map(([key]) => key);
 
+// Relative CLI flags resolve again on every run. An old successful --today
+// report must not survive midnight under today's label when a refresh fails.
+export function reportCacheKey(graph, args, computer, now = new Date()) {
+  const relative = args.some((arg) => ["--today", "--yesterday", "--week", "--month"].includes(arg));
+  const day = relative
+    ? `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`
+    : "";
+  return JSON.stringify([graph, args, computer, day]);
+}
+
 // Canonical-ordered valid keys; a missing, invalid or empty value means all.
 export function normalizeTokenTypes(value) {
   const set = new Set(Array.isArray(value) ? value : []);
