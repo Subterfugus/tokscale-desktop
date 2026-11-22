@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateDateFilter, filterTableRows, tokenTotal, reportRangeLabel, graphAverageTokens, calendarContributionCells, reportCacheKey } from "../renderer/report-data.js";
+import { validateDateFilter, filterTableRows, tokenTotal, reportRangeLabel, graphAverageTokens, calendarContributionCells, reportCacheKey, periodArgs } from "../renderer/report-data.js";
 
 test("relative reports cannot reuse another day's successful totals after a failed refresh", () => {
   const before = new Date(2026, 9, 30, 23, 59);
@@ -69,12 +69,23 @@ test("table search includes nested session metadata and trims whitespace", () =>
   assert.deepEqual(filterTableRows([row], [], "renamed project", "sessionId", 1), [row]);
 });
 
-test("week and month labels expose calendar boundaries across months and years", () => {
+test("the 30 days preset sends the last 30 local calendar days, including today", () => {
+  assert.deepEqual(periodArgs("30days", new Date(2026, 10, 22, 0, 5)), ["--since", "2026-10-24"]);
+  // Crosses a year boundary and a leap day on local dates.
+  assert.deepEqual(periodArgs("30days", new Date(2026, 0, 3, 23, 59)), ["--since", "2025-12-05"]);
+  assert.deepEqual(periodArgs("30days", new Date(2028, 2, 1, 12)), ["--since", "2028-02-01"]);
+  assert.deepEqual(periodArgs("week", new Date(2026, 10, 22)), ["--week"]);
+  assert.deepEqual(periodArgs("today"), ["--today"]);
+  assert.deepEqual(periodArgs("all"), []);
+  assert.deepEqual(periodArgs("month"), []);
+});
+
+test("week and 30 days labels expose calendar boundaries across months and years", () => {
   const now = new Date(2026, 0, 3, 23, 30);
   const week = reportRangeLabel({ period: "week" }, now);
   assert.match(week, /Dec 28, 2025/);
   assert.match(week, /Jan 3, 2026/);
-  assert.match(reportRangeLabel({ period: "month" }, now), /Jan 1, 2026.*Jan 3, 2026/);
+  assert.match(reportRangeLabel({ period: "30days" }, now), /Dec 5, 2025.*Jan 3, 2026/);
   assert.match(reportRangeLabel({ period: "yesterday" }, now), /Jan 2, 2026/);
   assert.equal(reportRangeLabel({ period: "all" }, now), "All recorded history");
 });

@@ -81,7 +81,7 @@ let preferences = {
   theme: "dark",
   refreshInterval: 120000,
   home: "",
-  defaultPeriod: "month",
+  defaultPeriod: "30days",
   includeGeminiThoughts: true,
   upstreamNotifications: true,
   appUpdateChecks: true,

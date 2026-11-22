@@ -48,6 +48,18 @@ test('a corrupt settings file is backed up byte-for-byte before applying a new p
   assert.throws(()=>security.settings({theme:'invented'}),/Unknown/);
   assert.throws(()=>security.settings({defaultPeriod:'unsupported'}),/Unknown/);
 });
+test('a saved calendar-month default date range loads as the rolling 30 days',async t=>{
+  const dir=await scratch(t),file=path.join(dir,'desktop-settings.json');
+  await fs.writeFile(file,JSON.stringify({theme:'light',defaultPeriod:'month'}));
+  const store=createPreferences(file,{theme:'dark',defaultPeriod:'30days'},security.settings);
+  const loaded=await store.load();
+  assert.equal(loaded.warning,'');
+  assert.equal(loaded.values.defaultPeriod,'30days');
+  assert.equal(loaded.values.theme,'light');
+  assert.equal(security.settings({defaultPeriod:'30days'}).defaultPeriod,'30days');
+  await store.save({theme:'dark'});
+  assert.equal(JSON.parse(await fs.readFile(file,'utf8')).defaultPeriod,'30days');
+});
 test('session titles map real rollout filename identities to saved names without modifying the index',async t=>{
   const home=await scratch(t),root=path.join(home,'.codex');await fs.mkdir(root);
   const file=path.join(root,'state_5.sqlite'),db=new DatabaseSync(file);

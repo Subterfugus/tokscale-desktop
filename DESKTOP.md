@@ -8,7 +8,7 @@ The application runs in a Windows window and loads its interface from bundled fi
 
 ## Desktop views
 
-The sidebar groups pages as Reports, Accounts and Tools, with Settings at the bottom. Report pages share one filter row: Today, Yesterday, 7 days, Month, All time, a Custom date range or calendar year, and a client selector. The header shows when the data was last refreshed.
+The sidebar groups pages as Reports, Accounts and Tools, with Settings at the bottom. Report pages share one filter row: Today, Yesterday, 7 days, 30 days (the last 30 local calendar days including today), All time, a Custom date range or calendar year, and a client selector. The header shows when the data was last refreshed.
 
 | Group | Page | What is available |
 | --- | --- | --- |

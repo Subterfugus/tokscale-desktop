@@ -84,7 +84,9 @@ function settings(value) {
       result[key] = value[key];
     }
   if (value.theme !== undefined && value.theme !== 'system' && !THEMES.some(theme => theme.id === value.theme)) throw new Error('Unknown appearance setting');
-  if (value.defaultPeriod !== undefined && !['today','yesterday','week','month','all'].includes(value.defaultPeriod)) throw new Error('Unknown default date range');
+  // "month" (the calendar month so far) was replaced by a rolling 30 days.
+  if (result.defaultPeriod === 'month') result.defaultPeriod = '30days';
+  if (value.defaultPeriod !== undefined && !['today','yesterday','week','30days','all'].includes(result.defaultPeriod)) throw new Error('Unknown default date range');
   if (value.tokenTypes !== undefined) {
     const known = ['input','output','cacheRead','cacheWrite','reasoning'];
     if (!Array.isArray(value.tokenTypes) || !value.tokenTypes.length || value.tokenTypes.some(type => !known.includes(type))) throw new Error('Unknown token type');

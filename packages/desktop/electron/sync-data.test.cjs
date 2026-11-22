@@ -84,6 +84,8 @@ test("report filters follow the engine's date flags on local calendar dates", ()
   assert.deepEqual(f("--yesterday").since, "2026-10-08");
   assert.deepEqual([f("--week").since, f("--week").until], ["2026-10-03", "2026-10-09"]);
   assert.deepEqual([f("--month").since, f("--month").until], ["2026-10-01", "2026-10-09"]);
+  // The 30 days preset arrives as --since 29 days back with no end date.
+  assert.deepEqual(f("--since", "2026-09-10"), { since: "2026-09-10", until: "", client: "", local: true });
   assert.deepEqual([f("--year", "2025").since, f("--year", "2025").until], ["2025-01-01", "2025-12-31"]);
   assert.deepEqual(f("--since", "2026-01-05", "--client", "codex"), {
     since: "2026-01-05", until: "", client: "codex", local: true,

@@ -114,6 +114,22 @@ async function runUiChecks({ window, mini, output, terminalCount, fixtureHome })
     }), label, "Navigation highlight does not match the displayed page");
   };
 
+  // A fresh install opens on the rolling 30 days: the last 30 local calendar
+  // days including today.
+  const rolling = await exec(() => {
+    const local = (d) => d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    const now = new Date(), start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29);
+    return {
+      active: document.querySelector(".period-tabs button.active")?.textContent.trim(),
+      summary: document.querySelector(".filter-summary")?.textContent.trim(),
+      expected: `${local(start)} → ${local(now)}`,
+      labels: [...document.querySelectorAll(".period-tabs button")].map((b) => b.textContent.trim()),
+    };
+  });
+  assert.equal(rolling.active, "30 days");
+  assert.equal(rolling.summary, rolling.expected);
+  assert.ok(!rolling.labels.includes("Month"), "The calendar Month preset is still shown");
+  checks.push("Default date range is the rolling 30 days ending today");
   await click(".period-tabs button", "All time");
   await ready();
   await wait(() =>

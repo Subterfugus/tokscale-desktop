@@ -29,6 +29,7 @@ import {
   normalizeTokenTypes,
   validateDateFilter,
   reportRangeLabel,
+  periodArgs,
 } from "./report-data.js";
 import { cssVariable, resolveTheme } from "./themes.js";
 import {
@@ -67,7 +68,7 @@ const PERIODS = [
   ["today", "Today"],
   ["yesterday", "Yesterday"],
   ["week", "7 days"],
-  ["month", "Month"],
+  ["30days", "30 days"],
   ["all", "All time"],
 ];
 const FILTERED = ["overview", "models", "activity", "projects", "insights"];
@@ -90,9 +91,9 @@ function App() {
       theme: "dark",
       refreshInterval: 120000,
       home: "",
-      defaultPeriod: "month",
+      defaultPeriod: "30days",
     }),
-    [period, setPeriod] = useState("month"),
+    [period, setPeriod] = useState("30days"),
     [client, setClient] = useState("all"),
     [computer, setComputer] = useState("all"),
     [syncState, setSyncState] = useState(null),
@@ -115,7 +116,7 @@ function App() {
       .then(([i, s]) => {
         setInfo(i);
         setSettings((x) => ({ ...x, ...s }));
-        setPeriod(s.defaultPeriod || "month");
+        setPeriod(s.defaultPeriod || "30days");
         setTokenTypes(normalizeTokenTypes(s.tokenTypes));
         setReady(true);
       })
@@ -209,6 +210,8 @@ function App() {
     if (list && client !== "all" && !list.some((c) => c.client === client))
       setClient("all");
   }, [clientState.data, client]);
+  // The rolling 30 days moves with the local date, so a refresh on a new day
+  // recomputes its start.
   const filterArgs = useMemo(() => {
     const a = [];
     if (period === "custom") {
@@ -216,11 +219,11 @@ function App() {
       if (until) a.push("--until", until);
     } else if (period === "year") {
       if (year) a.push("--year", year);
-    } else if (period !== "all") a.push(`--${period}`);
+    } else a.push(...periodArgs(period, new Date(lastRefresh)));
     if (client !== "all") a.push("--client", client);
     if (settings.home) a.push("--home", settings.home);
     return a;
-  }, [period, since, until, year, client, settings.home]);
+  }, [period, since, until, year, client, settings.home, lastRefresh.toDateString()]);
   const focusDay = (date) => {
     setSaved((s) => s || { period, since, until, year });
     setPeriod("custom");

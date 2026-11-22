@@ -207,7 +207,7 @@ export function SettingsView({ settings, setSettings, info, toCommand, onSaved, 
             <option value="today">Today</option>
             <option value="yesterday">Yesterday</option>
             <option value="week">Last 7 days</option>
-            <option value="month">This month</option>
+            <option value="30days">Last 30 days</option>
             <option value="all">All time</option>
           </Select>
         </Row>

@@ -16,11 +16,21 @@ export const ALL_TOKEN_TYPES = TOKEN_TYPES.map(([key]) => key);
 
 // Relative CLI flags resolve again on every run. An old successful --today
 // report must not survive midnight under today's label when a refresh fails.
+const localDate = (date) =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+
+// Engine date flags for a preset. "30days" is the last 30 local calendar days
+// including today; the engine has no flag for it, so it is sent as --since.
+export function periodArgs(period, now = new Date()) {
+  if (period === "30days")
+    return ["--since", localDate(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29))];
+  if (["today", "yesterday", "week"].includes(period)) return [`--${period}`];
+  return [];
+}
+
 export function reportCacheKey(graph, args, computer, now = new Date()) {
   const relative = args.some((arg) => ["--today", "--yesterday", "--week", "--month"].includes(arg));
-  const day = relative
-    ? `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`
-    : "";
+  const day = relative ? localDate(now) : "";
   return JSON.stringify([graph, args, computer, day]);
 }
 
@@ -128,7 +138,7 @@ export function reportRangeLabel({ period, since = "", until = "", year = "" }, 
   const start = new Date(end);
   if (period === "yesterday") { end.setDate(end.getDate() - 1); start.setDate(start.getDate() - 1); }
   if (period === "week") start.setDate(start.getDate() - 6);
-  if (period === "month") start.setDate(1);
+  if (period === "30days") start.setDate(start.getDate() - 29);
   return `${label(start)}${start.getTime() === end.getTime() ? "" : ` → ${label(end)}`} · local calendar dates`;
 }
 
