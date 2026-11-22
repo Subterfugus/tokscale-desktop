@@ -272,6 +272,20 @@ dd,
   gap: 12px;
   padding: 0 24px 12px;
 }
+/* A native select is as wide as its longest option, and the engine's client
+   list grows with each release; let the filter selects shrink to the room
+   left in the row and truncate the shown value instead of overflowing. */
+.filterbar .select {
+  flex: 0 1 auto;
+  min-width: 96px;
+}
+.filterbar .select select {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .filter-summary {
   flex: 1;
   min-width: 0;
