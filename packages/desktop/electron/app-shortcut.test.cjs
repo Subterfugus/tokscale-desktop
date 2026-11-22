@@ -57,3 +57,10 @@ test("repairs a broken desktop shortcut but never creates or steals one", () => 
   const working = fakes({ [path.join(START, NAME)]: { target: EXE, appUserModelId: ID }, [path.join(DESK, NAME)]: { target: installed } }, [installed]);
   assert.deepEqual(run(working), []);
 });
+
+test("moves a desktop shortcut off an older portable release that still exists", () => {
+  const previous = "C:/Users/me/Downloads/Tokscale-Desktop-0.4.15-x64.exe";
+  const f = fakes({ [path.join(START, NAME)]: { target: EXE, appUserModelId: ID }, [path.join(DESK, NAME)]: { target: previous } }, [previous]);
+  assert.deepEqual(run(f), [path.join(DESK, NAME)]);
+  assert.equal(f.written[0].options.target, EXE);
+});
