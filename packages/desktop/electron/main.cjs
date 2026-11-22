@@ -34,6 +34,7 @@ const { createAppUpdate, validateState: validateAppUpdateState } = require("./ap
 const { downloadUpdate, replacedFile } = require("./app-install.cjs");
 const { createSync } = require("./sync.cjs");
 const syncData = require("./sync-data.cjs");
+const { resetPricingOnEngineChange } = require("./engine-cache.cjs");
 const pkg = require("../package.json");
 const ENGINE_VERSION = pkg.dependencies["@tokscale/cli-win32-x64-msvc"];
 const enginePath = app.isPackaged
@@ -937,6 +938,12 @@ else {
       const loaded = await preferenceStore.load();
       preferences=loaded.values; settingsWarning=loaded.warning;
       if (smoke) await savePreferences({home:switchValue("--smoke-home") || ""});
+      // Before any engine run: a price table saved by the previous engine can lack rates.
+      await resetPricingOnEngineChange({
+        env: engineEnv(),
+        version: ENGINE_VERSION,
+        markerFile: path.join(app.getPath("userData"), "engine-version"),
+      }).catch(() => {});
       Menu.setApplicationMenu(null);
       applyTheme();
       nativeTheme.on("updated", applyTheme);
