@@ -35,6 +35,7 @@ const { downloadUpdate, replacedFile } = require("./app-install.cjs");
 const { createSync } = require("./sync.cjs");
 const syncData = require("./sync-data.cjs");
 const { resetPricingOnEngineChange } = require("./engine-cache.cjs");
+const { refreshShortcuts } = require("./app-shortcut.cjs");
 const pkg = require("../package.json");
 const ENGINE_VERSION = pkg.dependencies["@tokscale/cli-win32-x64-msvc"];
 const enginePath = app.isPackaged
@@ -1047,6 +1048,18 @@ else {
       // Without a tray icon there would be no way back to a hidden window.
       if (startHidden && !tray) window.show();
       applyLoginItem({ startup: true });
+      if (portableFile && !smoke && process.platform === "win32") {
+        try {
+          refreshShortcuts({
+            shell,
+            exists: (file) => require("node:fs").existsSync(file),
+            target: portableFile,
+            startMenuDir: path.join(app.getPath("appData"), "Microsoft", "Windows", "Start Menu", "Programs"),
+            desktopDir: app.getPath("desktop"),
+            appUserModelId: "io.tokscale.desktop",
+          });
+        } catch {}
+      }
       refreshTray();
       monitor.start();
       if (preferences.upstreamNotifications !== false) upstreamMonitor.start();
