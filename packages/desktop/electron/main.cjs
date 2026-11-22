@@ -35,6 +35,7 @@ const { downloadUpdate, replacedFile } = require("./app-install.cjs");
 const { createSync } = require("./sync.cjs");
 const syncData = require("./sync-data.cjs");
 const pkg = require("../package.json");
+const ENGINE_VERSION = pkg.dependencies["@tokscale/cli-win32-x64-msvc"];
 const enginePath = app.isPackaged
   ? path.join(process.resourcesPath, "engine", "tokscale.exe")
   : path.join(
@@ -548,7 +549,7 @@ function wireApi() {
   handle("getSessionTitles", (home = '') => getSessionTitles(home, {env:engineEnv()}));
   handle("getInfo", () => ({
     version: pkg.version,
-    engineVersion: "4.17.0",
+    engineVersion: ENGINE_VERSION,
     enginePath,
     platform: process.platform,
     homePath: preferences.home || os.homedir(),
@@ -818,7 +819,7 @@ async function smokeTest() {
   })()`);
   if (
     bridge.version.code !== 0 ||
-    !bridge.version.stdout.includes("4.17.0") ||
+    !bridge.version.stdout.includes(ENGINE_VERSION) ||
     bridge.invalidCode === 0 ||
     !bridge.blockedUrl ||
     bridge.requireType !== "undefined" ||
@@ -836,7 +837,7 @@ async function smokeTest() {
       try { id = await window.tokscale.startTerminal({args:['--no-spinner','--version'], cols:100, rows:30}); } catch(error) { clearTimeout(timer); dataOff(); exitOff(); reject(error); }
     });
   })()`);
-  if (terminalResult.code !== 0 || !terminalResult.text.includes("4.17.0"))
+  if (terminalResult.code !== 0 || !terminalResult.text.includes(ENGINE_VERSION))
     throw new Error(
       "Embedded terminal smoke test failed: " + JSON.stringify(terminalResult),
     );

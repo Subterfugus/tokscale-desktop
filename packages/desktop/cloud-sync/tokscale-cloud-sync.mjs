@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 // a stale cached download can never roll it back.
 export const VERSION = 4;
 // Keep in step with the engine Tokscale Desktop bundles (package.json).
-export const ENGINE = "tokscale@4.17.0";
+export const ENGINE = "tokscale@4.23.1";
 export const DEVICE_ID = "claude-cloud";
 export const DEVICE_NAME = "Claude cloud";
 const TOKEN_FIELDS = ["input", "output", "cacheRead", "cacheWrite", "reasoning"];
